@@ -1,0 +1,71 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Django: runserver (task)",
+      "type": "process",
+      "command": "${workspaceFolder}/src/venv/Scripts/python.exe",
+      "args": [
+        "${workspaceFolder}/src/app/manage.py",
+        "runserver",
+        "127.0.0.1:8000",
+        "--noreload"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/src/app"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "runOptions": {
+        "instanceLimit": 1
+      }
+    },
+    {
+      "label": "Pytest: all tests",
+      "type": "process",
+      "command": "${workspaceFolder}/src/venv/Scripts/python.exe",
+      "args": [
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "runOptions": {
+        "instanceLimit": 1
+      }
+    },
+    {
+      "label": "Install dependencies",
+      "type": "process",
+      "command": "${workspaceFolder}/src/venv/Scripts/python.exe",
+      "args": [
+        "-m",
+        "pip",
+        "install",
+        "-r",
+        "${workspaceFolder}/src/requirements"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    }
+  ]
+}

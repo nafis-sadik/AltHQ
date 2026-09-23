@@ -6,3 +6,4 @@ SQLAlchemy==2.0.51
 tinydb==4.8.2
 typing_extensions==4.16.0
 unqlite==1.2.0
+pytest==8.4.2

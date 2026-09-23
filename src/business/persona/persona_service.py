@@ -105,6 +105,14 @@ class PersonaService:
 
         return await self._get_default_persona()
 
+    async def list_personas_async(self) -> List[Any]:
+        """Return all available agents for the dashboard's agent switcher."""
+        personas = await self._repository.get_all_async()
+        return sorted(
+            personas,
+            key=lambda persona: (str(persona.name).casefold(), str(persona.id)),
+        )
+
     def validate_update(self, update: PersonaUpdate) -> PersonaValidationResult:
         """Validate and normalize an incoming persona update without touching storage."""
         errors: List[str] = []

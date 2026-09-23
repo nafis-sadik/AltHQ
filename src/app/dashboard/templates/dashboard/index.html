@@ -18,10 +18,23 @@
   <nav class="navbar navbar-dark border-bottom border-secondary">
     <div class="container">
       <span class="navbar-brand mb-0">🤖 Autonomous Agent — Persona Dashboard</span>
-      <span class="ms-auto d-flex align-items-center gap-3">
-        <a class="nav-link p-0 active" href="{% url 'dashboard:index' %}">Persona</a>
-        <a class="nav-link p-0" href="{% url 'dashboard:event_log' %}">Event Log</a>
-      </span>
+      <div class="ms-auto d-flex align-items-center gap-3">
+        <a class="nav-link p-0 active" href="{% url 'dashboard:index' %}{% if selected_agent %}?agent_id={{ selected_agent.id }}{% endif %}">Persona</a>
+        <a class="nav-link p-0" href="{% url 'dashboard:event_log' %}{% if selected_agent %}?agent_id={{ selected_agent.id }}{% endif %}">Event Log</a>
+        {% if agents %}
+          <form method="get" action="{% url 'dashboard:agent_switch' %}" class="d-flex align-items-center gap-1">
+            <label class="visually-hidden" for="persona-agent-switcher">Active agent</label>
+            <select id="persona-agent-switcher" name="agent_id" class="form-select form-select-sm" onchange="this.form.submit()">
+              {% for agent in agents %}
+                <option value="{{ agent.id }}" {% if selected_agent and agent.id == selected_agent.id %}selected{% endif %}>{{ agent.name }}</option>
+              {% endfor %}
+            </select>
+            <input type="hidden" name="destination" value="index">
+            <noscript><button class="btn btn-sm btn-outline-secondary" type="submit">Switch</button></noscript>
+          </form>
+        {% endif %}
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'dashboard:persona_new' %}?new=1">New agent</a>
+      </div>
       <span class="badge text-bg-secondary">Layer 1 · Django</span>
       <span class="badge text-bg-secondary">WAL SQLite</span>
     </div>
@@ -32,7 +45,7 @@
     <div class="col-lg-7">
       <div class="card h-100">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <strong>Persona</strong>
+          <strong>Persona{% if selected_agent %} · {{ selected_agent.name }}{% endif %}</strong>
           <span class="badge text-bg-primary">via PersonaService (Layer 2)</span>
         </div>
         <div class="card-body">
@@ -85,7 +98,7 @@
         <div class="card-header"><strong>Profile picture</strong></div>
         <div class="card-body">
           <div class="d-flex align-items-center gap-3">
-            <img id="avatar-image" src="{% url 'dashboard:avatar' %}" alt="Profile picture" width="96" height="96"
+            <img id="avatar-image" src="{% url 'dashboard:avatar' %}{% if selected_agent %}?agent_id={{ selected_agent.id }}{% endif %}" alt="Profile picture" width="96" height="96"
                  class="border rounded" style="object-fit: cover;">
             <div>
               <button id="generate-avatar-btn" class="btn btn-primary btn-sm">Generate picture</button>
@@ -172,9 +185,10 @@
       $.ajax({
         url: '{% url 'dashboard:avatar_generate' %}',
         method: 'POST',
+        data: { agent_id: '{{ selected_agent.id }}' },
         headers: { 'X-CSRFToken': csrfToken },
       }).done(function (data) {
-        $('#avatar-image').attr('src', '{% url 'dashboard:avatar' %}?t=' + Date.now());
+        $('#avatar-image').attr('src', '{% url 'dashboard:avatar' %}?agent_id={{ selected_agent.id }}&t=' + Date.now());
         showAlert('success', ['Profile picture generated.']);
       }).fail(function (xhr) { showAlert('danger', xhr.responseJSON.errors); });
     });
@@ -183,6 +197,7 @@
       const fileInput = $('#sheet-file')[0];
       if (!fileInput.files.length) { showAlert('danger', ['Choose an image file first.']); return; }
       const formData = new FormData();
+      formData.append('agent_id', '{{ selected_agent.id }}');
       formData.append('sheet', fileInput.files[0]);
       $.ajax({
         url: '{% url 'dashboard:sheet_upload' %}',
@@ -202,6 +217,7 @@
       $.ajax({
         url: '/api/sheets/' + sheetId + '/delete/',
         method: 'POST',
+        data: { agent_id: '{{ selected_agent.id }}' },
         headers: { 'X-CSRFToken': csrfToken },
       }).done(function (data) { location.reload(); })
         .fail(function (xhr) { showAlert('danger', xhr.responseJSON.errors); });

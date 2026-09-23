@@ -52,12 +52,14 @@ def test_sqlite_engine_initializes_wal_and_busy_timeout(db_url):
         async with engine.connect() as conn:
             journal_mode = (await conn.execute(text("PRAGMA journal_mode;"))).scalar()
             busy_timeout = (await conn.execute(text("PRAGMA busy_timeout;"))).scalar()
+            foreign_keys = (await conn.execute(text("PRAGMA foreign_keys;"))).scalar()
         await engine.dispose()
-        return journal_mode, busy_timeout
+        return journal_mode, busy_timeout, foreign_keys
 
-    journal_mode, busy_timeout = asyncio.run(check())
+    journal_mode, busy_timeout, foreign_keys = asyncio.run(check())
     assert journal_mode == "wal"
     assert busy_timeout == 5000
+    assert foreign_keys == 1
 
 
 def test_agent_entity_schema_matches_spec():

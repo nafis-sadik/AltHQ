@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -107,7 +107,12 @@ class EventLogNode(Base):
         primary_key=True,
         default=lambda: uuid.uuid4().hex,
     )
-    agent_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Each timeline belongs to exactly one Agent row.
+    agent_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     sequence_index: Mapped[int] = mapped_column(Integer, nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(
@@ -146,9 +151,18 @@ class Message(Base):
         primary_key=True,
         default=lambda: uuid.uuid4().hex,
     )
-    node_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    node_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("event_log_nodes.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Stores the canonical local-user token or the owning Agent's primary key.
     sender: Mapped[str] = mapped_column(String(60), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Conversation order is explicit and independent from the user-editable
+    # conversation timestamp. This lets a user reorder messages while still
+    # correcting the time at which a message was spoken.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,
@@ -159,7 +173,7 @@ class Message(Base):
         """Return a compact debug representation of the message row."""
         return (
             f"Message(id={self.id!r}, node_id={self.node_id!r}, "
-            f"sender={self.sender!r})"
+            f"sender={self.sender!r}, position={self.position!r})"
         )
 
     def to_dict(self) -> dict:
@@ -169,5 +183,6 @@ class Message(Base):
             "node_id": self.node_id,
             "sender": self.sender,
             "content": self.content,
+            "position": self.position,
             "timestamp": self.timestamp,
         }

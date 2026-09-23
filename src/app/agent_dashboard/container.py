@@ -71,6 +71,12 @@ class Container:
         bootstrap_loop = asyncio.new_event_loop()
         try:
             bootstrap_loop.run_until_complete(self._repository.create_schema_async())
+            bootstrap_loop.run_until_complete(
+                self._event_repository.create_schema_async()
+            )
+            bootstrap_loop.run_until_complete(
+                self._message_repository.create_schema_async()
+            )
         finally:
             bootstrap_loop.close()
 

@@ -2,8 +2,10 @@
 
 from typing import List, Optional
 
+from sqlalchemy import delete, inspect, select, text
+
 from core.db_engine import attach_sqlite_pragmas
-from core.dtos.db_entities import EventLogNode
+from core.dtos.db_entities import EventLogNode, Message
 from core.repositories.db_sql_repo.sql_alchemy_repository import SQLAlchemyRepository
 
 
@@ -75,14 +77,73 @@ class EventLogRepository(SQLAlchemyRepository[EventLogNode]):
         self._ensure_session()
         return await super().update_async(entity_id, values)
 
-    async def delete_async(self, entity_id: str) -> None:
-        """Delete one event node, opening a session first when needed."""
+    async def delete_if_empty_async(self, entity_id: str) -> bool:
+        """Delete a node atomically only when it has no attached messages."""
         self._ensure_session()
-        await super().delete_async(entity_id)
+        message_exists = select(Message.id).where(Message.node_id == entity_id).exists()
+        result = await self._session.execute(
+            delete(EventLogNode).where(
+                EventLogNode.id == entity_id,
+                ~message_exists,
+            )
+        )
+        await self._session.commit()
+        return result.rowcount == 1
+
+    async def delete_async(self, entity_id: str) -> None:
+        """Delete one event node, rejecting deletion while messages remain."""
+        deleted = await self.delete_if_empty_async(entity_id)
+        if deleted:
+            return
+        if await self.get_async(entity_id) is None:
+            return
+        raise ValueError(
+            "A node with messages cannot be deleted. "
+            "Move or delete its messages first."
+        )
 
     async def create_schema_async(self) -> None:
-        """Create the tables when they do not exist yet."""
+        """Create tables and upgrade legacy event tables with the Agent foreign key."""
         await self.create_schema()
+        await self._ensure_agent_foreign_key_async()
+
+    async def _ensure_agent_foreign_key_async(self) -> None:
+        """Rebuild an old event table so ``agent_id`` references ``agents.id``."""
+        async with self._engine.begin() as connection:
+            table_names = await connection.run_sync(
+                lambda sync_connection: inspect(sync_connection).get_table_names()
+            )
+            if "event_log_nodes" not in table_names:
+                return
+
+            foreign_keys = await connection.run_sync(
+                lambda sync_connection: inspect(sync_connection).get_foreign_keys(
+                    "event_log_nodes"
+                )
+            )
+            has_agent_foreign_key = any(
+                foreign_key.get("referred_table") == "agents"
+                and "agent_id" in foreign_key.get("constrained_columns", [])
+                for foreign_key in foreign_keys
+            )
+            if has_agent_foreign_key:
+                return
+
+            await connection.execute(
+                text("ALTER TABLE event_log_nodes RENAME TO event_log_nodes_legacy")
+            )
+            await connection.run_sync(
+                lambda sync_connection: EventLogNode.__table__.create(sync_connection)
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO event_log_nodes "
+                    "(id, agent_id, sequence_index, summary, timestamp, is_active) "
+                    "SELECT id, agent_id, sequence_index, summary, timestamp, is_active "
+                    "FROM event_log_nodes_legacy"
+                )
+            )
+            await connection.execute(text("DROP TABLE event_log_nodes_legacy"))
 
     async def drop_schema_async(self) -> None:
         """Drop the tables, returning the database to an empty state."""

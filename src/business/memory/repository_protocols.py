@@ -41,6 +41,14 @@ class IEventLogRepository(ABC):
         """Update the event node with the given id and return the updated row."""
         ...
 
+    async def delete_if_empty_async(self, entity_id: str) -> bool:
+        """Delete an event node only when no messages are attached to it."""
+        ...
+
+    async def delete_async(self, entity_id: str) -> None:
+        """Delete an event node after the empty-node guard succeeds."""
+        ...
+
 
 class IMessageRepository(ABC):
     """Contract for persistence of dialogue messages attached to event nodes."""
@@ -57,7 +65,7 @@ class IMessageRepository(ABC):
 
     @abstractmethod
     async def get_by_node_async(self, node_id: str) -> List[Any]:
-        """Return every message attached to the node, oldest first."""
+        """Return every message attached to the node in explicit sequence order."""
         ...
 
     @abstractmethod

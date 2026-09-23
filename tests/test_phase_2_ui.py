@@ -1,6 +1,29 @@
-"""Layer 1 UI tests: the event log timeline vertical slice for Phase 2 Task 1."""
+"""Layer 1 UI and API tests for the explicit multi-agent Line of Truth workflow."""
+
+import re
 
 # Paths, settings, and artifact isolation are configured in conftest.py.
+
+
+def _create_persona(client):
+    """Create the default persona used by the event log flows."""
+    return client.post(
+        "/persona/create/",
+        {"name": "Aria", "gender": "female", "bio": "A warm companion."},
+    )
+
+
+def _agent_id(client):
+    """Read the active agent id from the rendered persona dashboard."""
+    html = client.get("/").content.decode()
+    return html.split('name="agent_id" value="')[1].split('"')[0]
+
+
+def _create_node(client, summary):
+    """Create one timeline node and return its API payload."""
+    response = client.post("/api/events/create/", {"summary": summary})
+    assert response.status_code == 200
+    return response.json()["node"]
 
 
 def test_event_log_page_without_persona_shows_empty_state(client):
@@ -10,50 +33,39 @@ def test_event_log_page_without_persona_shows_empty_state(client):
 
     assert response.status_code == 200
     assert "Line of Truth" in html
-    assert "Create a persona before recording event memories." in html
+    assert "Create a persona before recording timeline nodes and messages." in html
 
 
 def test_event_log_empty_timeline_when_no_nodes(client):
-    """With a persona but no events the timeline must show its empty state."""
-    client.post(
-        "/persona/create/",
-        {"name": "Aria", "gender": "female", "bio": "A warm companion."},
-    )
+    """With a persona but no nodes the timeline must show its empty state."""
+    _create_persona(client)
 
     response = client.get("/events/")
     html = response.content.decode()
 
     assert response.status_code == 200
-    assert "No events recorded yet." in html
-    assert "Active node limit:" in html
-    assert "Append memory" in html
+    assert "No nodes recorded yet." in html
+    assert "Add timeline node" in html
+    assert "plain chronological node list" in html
 
 
 def test_event_node_create_and_timeline_render(client):
-    """Appending an event must persist it and render it on the timeline."""
-    client.post(
-        "/persona/create/",
-        {"name": "Aria", "gender": "female", "bio": "A warm companion."},
-    )
+    """Adding a node must persist it and render an explicit message editor."""
+    _create_persona(client)
+    created = _create_node(client, "Woke up at dawn.")
+    assert created["sequence_index"] == 1
 
-    created = client.post("/api/events/create/", {"summary": "Woke up at dawn."})
-    assert created.status_code == 200
-    payload = created.json()
-    assert payload["ok"] is True
-    assert payload["node"]["sequence_index"] == 1
-
-    dashboard = client.get("/events/").content.decode()
-    assert "Woke up at dawn." in dashboard
-    assert "#1" in dashboard
-    assert "active" in dashboard
+    html = client.get("/events/").content.decode()
+    assert "Woke up at dawn." in html
+    assert "Node #1" in html
+    assert "Add message" in html
+    assert "Delete" in html
+    assert "God-Mode" not in html
 
 
 def test_event_node_create_rejects_blank_summary(client):
-    """Blank summaries must be rejected without a server error."""
-    client.post(
-        "/persona/create/",
-        {"name": "Aria", "gender": "female", "bio": "A warm companion."},
-    )
+    """Blank node summaries must be rejected without a server error."""
+    _create_persona(client)
 
     response = client.post("/api/events/create/", {"summary": "   "})
     assert response.status_code == 422
@@ -66,62 +78,183 @@ def test_event_log_page_links_back_to_persona_dashboard(client):
     assert 'href="/"' in html
 
 
-def _create_persona(client):
-    """Create the default persona used by the event log flows."""
-    client.post(
-        "/persona/create/",
-        {"name": "Aria", "gender": "female", "bio": "A warm companion."},
-    )
-
-
-def test_memory_window_panel_renders_sliding_window_stats(client):
-    """The timeline must surface the active window, archived, and limit counts."""
+def test_explicit_node_edit_is_visible_and_not_silent(client):
+    """Node edits are ordinary visible timeline operations."""
     _create_persona(client)
-    for index in range(1, 6):
-        client.post("/api/events/create/", {"summary": f"Memory {index}."})
-
-    html = client.get("/events/").content.decode()
-    assert "Active memory window" in html
-    assert "Sliding Window · MemoryWindowService" in html
-    assert "window limit" in html
-    assert "God-Mode" in html
-
-
-def test_god_mode_silent_edit_rewrites_node(client):
-    """The silent edit endpoint must rewrite a past node without audit output."""
-    _create_persona(client)
-    created = client.post("/api/events/create/", {"summary": "Original memory."})
-    node_id = created.json()["node"]["id"]
+    node = _create_node(client, "Original memory.")
 
     edited = client.post(
-        f"/api/events/{node_id}/edit/",
-        {"summary": "The accepted reality.", "is_active": "0"},
+        f"/api/events/{node['id']}/edit/",
+        {"summary": "The corrected memory."},
     )
     assert edited.status_code == 200
-    payload = edited.json()
-    assert payload["ok"] is True
-    assert payload["node"]["summary"] == "The accepted reality."
-    assert payload["node"]["is_active"] is False
+    assert edited.json()["node"]["summary"] == "The corrected memory."
 
     html = client.get("/events/").content.decode()
-    assert "The accepted reality." in html
+    assert "The corrected memory." in html
     assert "Original memory." not in html
-    assert "archived" in html
-    assert "edited" not in html.lower()
+    assert "never hidden" in html
+    assert "God-Mode" not in html
 
 
-def test_god_mode_edit_rejects_blank_summary(client):
-    """Blank summaries must be rejected with 422 on the silent edit endpoint."""
+def test_node_delete_requires_zero_messages(client):
+    """A node with messages must stay until its messages are moved or deleted."""
     _create_persona(client)
-    created = client.post("/api/events/create/", {"summary": "Keep me."})
-    node_id = created.json()["node"]["id"]
+    source = _create_node(client, "Source node.")
+    target = _create_node(client, "Target node.")
+    message = client.post(
+        f"/api/events/{source['id']}/messages/create/",
+        {"sender": "user", "content": "Move me."},
+    ).json()["message"]
 
-    response = client.post(f"/api/events/{node_id}/edit/", {"summary": "   "})
-    assert response.status_code == 422
+    blocked = client.post(f"/api/events/{source['id']}/delete/")
+    assert blocked.status_code == 409
+    assert "messages" in blocked.json()["errors"][0].lower()
+
+    moved = client.post(
+        f"/api/messages/{message['id']}/move/",
+        {"node_id": target["id"]},
+    )
+    assert moved.status_code == 200
+    assert moved.json()["message"]["node_id"] == target["id"]
+
+    deleted = client.post(f"/api/events/{source['id']}/delete/")
+    assert deleted.status_code == 200
+    html = client.get("/events/").content.decode()
+    assert "Source node." not in html
+    assert "Target node." in html
 
 
-def test_god_mode_edit_missing_node_returns_404(client):
-    """Editing a nonexistent node must surface 404, never a 500."""
+def test_message_create_and_edit_support_speaker_and_manual_time(client):
+    """Message forms persist a speaker, content, and user-selected conversation time."""
     _create_persona(client)
-    response = client.post("/api/events/missing-node/edit/", {"summary": "Bogus."})
-    assert response.status_code == 404
+    agent_id = _agent_id(client)
+    node = _create_node(client, "A conversation happened.")
+
+    created = client.post(
+        f"/api/events/{node['id']}/messages/create/",
+        {
+            "agent_id": agent_id,
+            "sender": "user",
+            "content": "What happened?",
+            "conversation_time": "2024-05-04T10:30",
+        },
+    )
+    assert created.status_code == 200
+    message = created.json()["message"]
+    assert message["sender"] == "user"
+    assert message["content"] == "What happened?"
+    assert message["position"] == 0
+    assert message["timestamp"].startswith("2024-05-04T10:30")
+
+    edited = client.post(
+        f"/api/messages/{message['id']}/edit/",
+        {
+            "agent_id": agent_id,
+            "sender": agent_id,
+            "content": "I remembered the garden.",
+            "conversation_time": "2024-05-04T10:35",
+        },
+    )
+    assert edited.status_code == 200
+    updated = edited.json()["message"]
+    assert updated["sender"] == agent_id
+    assert updated["content"] == "I remembered the garden."
+    assert updated["timestamp"].startswith("2024-05-04T10:35")
+
+    html = client.get("/events/").content.decode()
+    assert "I remembered the garden." in html
+    assert "Conversation time" in html
+    assert "Move to node" in html
+    assert "God-Mode" not in html
+
+
+def test_messages_can_reorder_and_be_deleted(client):
+    """Message position controls up/down order and deletion is explicit."""
+    _create_persona(client)
+    agent_id = _agent_id(client)
+    node = _create_node(client, "A conversation happened.")
+    first = client.post(
+        f"/api/events/{node['id']}/messages/create/",
+        {"agent_id": agent_id, "sender": "user", "content": "One"},
+    ).json()["message"]
+    second = client.post(
+        f"/api/events/{node['id']}/messages/create/",
+        {"agent_id": agent_id, "sender": agent_id, "content": "Two"},
+    ).json()["message"]
+    third = client.post(
+        f"/api/events/{node['id']}/messages/create/",
+        {"agent_id": agent_id, "sender": "user", "content": "Three"},
+    ).json()["message"]
+
+    moved = client.post(
+        f"/api/messages/{third['id']}/move/",
+        {"direction": "up"},
+    )
+    assert moved.status_code == 200
+    html = client.get("/events/").content.decode()
+    assert html.index("Three") < html.index("Two")
+
+    invalid = client.post(
+        f"/api/messages/{second['id']}/move/",
+        {"direction": "sideways"},
+    )
+    assert invalid.status_code == 422
+
+    deleted = client.post(f"/api/messages/{second['id']}/delete/")
+    assert deleted.status_code == 200
+    html = client.get("/events/").content.decode()
+    assert "Two" not in html
+
+
+def test_agents_have_isolated_timelines_and_switcher(client):
+    """Each agent gets its own Line of Truth and selectable speaker identity."""
+    _create_persona(client)
+    first_agent_id = _agent_id(client)
+    second = client.post(
+        "/persona/create/",
+        {"name": "Beacon", "gender": "unspecified", "bio": "Second agent."},
+    )
+    assert second.status_code == 302
+
+    dashboard = client.get("/").content.decode()
+    agent_ids = re.findall(r'<option value="([a-f0-9]+)"', dashboard)
+    assert len(agent_ids) >= 2
+    second_agent_id = next(agent_id for agent_id in agent_ids if agent_id != first_agent_id)
+
+    first_node = _create_node(client, "Aria node.")
+    second_node_response = client.post(
+        "/api/events/create/",
+        {"agent_id": second_agent_id, "summary": "Beacon node."},
+    )
+    assert second_node_response.status_code == 200
+    second_node = second_node_response.json()["node"]
+
+    invalid_sender = client.post(
+        f"/api/events/{second_node['id']}/messages/create/",
+        {"agent_id": second_agent_id, "sender": "someone-else", "content": "No."},
+    )
+    assert invalid_sender.status_code == 422
+
+    message = client.post(
+        f"/api/events/{second_node['id']}/messages/create/",
+        {
+            "agent_id": second_agent_id,
+            "sender": second_agent_id,
+            "content": "I am Beacon.",
+        },
+    )
+    assert message.status_code == 200
+
+    switched = client.get(
+        f"/agents/switch/?agent_id={second_agent_id}&destination=events"
+    )
+    assert switched.status_code == 302
+    assert f"agent_id={second_agent_id}" in switched["Location"]
+
+    html = client.get(f"/events/?agent_id={second_agent_id}").content.decode()
+    assert "Beacon node." in html
+    assert "Aria node." not in html
+    assert "Beacon (AI agent)" in html
+    assert f'value="{second_agent_id}"' in html
+    assert first_node["id"] not in html

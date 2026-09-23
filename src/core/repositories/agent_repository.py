@@ -43,9 +43,10 @@ class AgentRepository(SQLAlchemyRepository[Agent]):
         return await super().get_async(entity_id)
 
     async def get_all_async(self) -> list:
-        """Fetch every agent, opening a session first when needed."""
+        """Fetch every agent in stable display order."""
         self._ensure_session()
-        return await super().get_all_async()
+        agents = await super().get_all_async()
+        return sorted(agents, key=lambda agent: (str(agent.name).casefold(), str(agent.id)))
 
     async def update_async(self, entity_id: str, values: dict) -> Agent:
         """Update one agent, opening a session first when needed."""
@@ -62,7 +63,7 @@ class AgentRepository(SQLAlchemyRepository[Agent]):
         await self.create_schema()
 
     async def get_default_agent_async(self) -> Optional[Agent]:
-        """Return the single persona row, or None when the agents table is still empty."""
+        """Return the first persona row, or None when the agents table is empty."""
         agents = await self.get_all_async()
 
         if not agents:

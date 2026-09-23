@@ -1,0 +1,100 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Django: runserver (debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/app/manage.py",
+      "args": [
+        "runserver",
+        "127.0.0.1:8000",
+        "--noreload"
+      ],
+      "cwd": "${workspaceFolder}/src/app",
+      "env": {
+        "DJANGO_SETTINGS_MODULE": "agent_dashboard.settings"
+      },
+      "console": "internalConsole",
+      "justMyCode": false,
+      "django": true
+    },
+    {
+      "name": "Django: runserver (auto-reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/app/manage.py",
+      "args": [
+        "runserver",
+        "127.0.0.1:8000"
+      ],
+      "cwd": "${workspaceFolder}/src/app",
+      "env": {
+        "DJANGO_SETTINGS_MODULE": "agent_dashboard.settings"
+      },
+      "console": "internalConsole",
+      "justMyCode": false,
+      "django": true,
+      "subProcess": true
+    },
+    {
+      "name": "Pytest: all tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "-q",
+        "tests"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "DJANGO_SETTINGS_MODULE": "agent_dashboard.settings"
+      },
+      "console": "internalConsole",
+      "justMyCode": false
+    },
+    {
+      "name": "Pytest: Phase 1",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "-q",
+        "tests/test_phase_1.py",
+        "tests/test_phase_1_ui.py"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "DJANGO_SETTINGS_MODULE": "agent_dashboard.settings"
+      },
+      "console": "internalConsole",
+      "justMyCode": false
+    },
+    {
+      "name": "Pytest: Phase 2",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "-q",
+        "tests/test_phase_2.py",
+        "tests/test_phase_2_ui.py"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "DJANGO_SETTINGS_MODULE": "agent_dashboard.settings"
+      },
+      "console": "internalConsole",
+      "justMyCode": false
+    },
+    {
+      "name": "Python: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "justMyCode": false
+    }
+  ]
+}

@@ -1,16 +1,19 @@
-"""Phase 2 Task 1 tests: event log schema, repositories, and the memory service wiring.
+"""Phase 2 tests: chronological node and message persistence plus memory services.
 
-Task 2 (sliding-window budgeting) and Task 3 (God-Mode edits + cache invalidation)
-are covered by their own phase tests added in the relevant sprints.
+The Line of Truth is an explicit, editable node list. Message ordering is
+independent from the user-editable conversation timestamp.
 """
 
 import asyncio
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from core.dtos.db_entities import Agent, EventLogNode, Message
+from core.repositories.agent_repository import AgentRepository
 from core.repositories.event_log_repository import EventLogRepository
 from core.repositories.message_repository import MessageRepository
 
@@ -34,7 +37,7 @@ def db_url(tmp_path):
 
 
 def test_event_log_node_schema_matches_spec():
-    """The event_log_nodes entity must expose exactly the Phase 2 columns."""
+    """The event_log_nodes entity must expose the timeline columns and Agent FK."""
     columns = {column.name for column in EventLogNode.__table__.columns}
     assert columns == {
         "id",
@@ -44,6 +47,65 @@ def test_event_log_node_schema_matches_spec():
         "timestamp",
         "is_active",
     }
+    assert any(
+        foreign_key.target_fullname == "agents.id"
+        for foreign_key in EventLogNode.__table__.foreign_keys
+    )
+
+
+def test_event_timelines_are_scoped_to_agent_foreign_key(db_url):
+    """Event nodes must belong to an existing Agent and remain agent-scoped."""
+    async def scenario():
+        agent_repository = AgentRepository(db_url)
+        event_repository = EventLogRepository(db_url)
+        try:
+            await agent_repository.create_schema_async()
+            async with agent_repository:
+                first = await agent_repository.insert_async(
+                    Agent(
+                        name="Aria",
+                        gender="female",
+                        profile_picture="x",
+                        bio="A",
+                        background_story="A",
+                    )
+                )
+                second = await agent_repository.insert_async(
+                    Agent(
+                        name="Beacon",
+                        gender="unspecified",
+                        profile_picture="x",
+                        bio="B",
+                        background_story="B",
+                    )
+                )
+
+            await event_repository.create_schema_async()
+            async with event_repository:
+                await event_repository.insert_async(
+                    {"agent_id": first.id, "summary": "Aria event."}
+                )
+                await event_repository.insert_async(
+                    {"agent_id": second.id, "summary": "Beacon event."}
+                )
+                assert [
+                    node.summary
+                    for node in await event_repository.get_timeline_async(first.id)
+                ] == ["Aria event."]
+                assert [
+                    node.summary
+                    for node in await event_repository.get_timeline_async(second.id)
+                ] == ["Beacon event."]
+
+                with pytest.raises(IntegrityError):
+                    await event_repository.insert_async(
+                        {"agent_id": "missing-agent", "summary": "Orphan."}
+                    )
+        finally:
+            await agent_repository.dispose()
+            await event_repository.dispose()
+
+    run(scenario())
 
 
 def test_message_schema_matches_spec():
@@ -54,8 +116,13 @@ def test_message_schema_matches_spec():
         "node_id",
         "sender",
         "content",
+        "position",
         "timestamp",
     }
+    assert any(
+        foreign_key.target_fullname == "event_log_nodes.id"
+        for foreign_key in Message.__table__.foreign_keys
+    )
 
 
 def _agent_id(db_url):
@@ -160,14 +227,88 @@ def test_message_repository_attaches_messages_to_node(db_url):
                     {"node_id": node.id, "sender": "user", "content": "Hello?"}
                 )
                 await message_repository.insert_async(
-                    {"node_id": node.id, "sender": "archetype", "content": "Hi there."}
+                    {"node_id": node.id, "sender": "agent-1", "content": "Hi there."}
                 )
 
                 messages = await message_repository.get_by_node_async(node.id)
                 assert [message.sender for message in messages] == [
                     "user",
-                    "archetype",
+                    "agent-1",
                 ]
+                assert [message.position for message in messages] == [0, 1]
+        finally:
+            await event_repository.dispose()
+            await message_repository.dispose()
+
+    run(scenario())
+
+
+def test_event_node_repository_blocks_delete_when_messages_exist(db_url):
+    """The persistence layer must refuse to delete a node with attached messages."""
+    agent_id = _agent_id(db_url)
+
+    async def scenario():
+        event_repository = EventLogRepository(db_url)
+        message_repository = MessageRepository(db_url)
+        try:
+            await event_repository.create_schema()
+            await message_repository.create_schema_async()
+            async with event_repository, message_repository:
+                node = await event_repository.insert_async(
+                    {"agent_id": agent_id, "summary": "Has a message."}
+                )
+                message = await message_repository.insert_async(
+                    {"node_id": node.id, "sender": "user", "content": "Hello."}
+                )
+
+                assert await event_repository.delete_if_empty_async(node.id) is False
+                with pytest.raises(ValueError, match="messages"):
+                    await event_repository.delete_async(node.id)
+                await message_repository.delete_async(message.id)
+                assert await event_repository.delete_if_empty_async(node.id) is True
+                assert await event_repository.get_async(node.id) is None
+        finally:
+            await event_repository.dispose()
+            await message_repository.dispose()
+
+    run(scenario())
+
+
+def test_message_repository_reorders_by_explicit_position(db_url):
+    """Message order must follow position even when timestamps are edited independently."""
+    agent_id = _agent_id(db_url)
+
+    async def scenario():
+        event_repository = EventLogRepository(db_url)
+        message_repository = MessageRepository(db_url)
+        try:
+            await event_repository.create_schema()
+            await message_repository.create_schema_async()
+            async with event_repository, message_repository:
+                node = await event_repository.insert_async(
+                    {"agent_id": agent_id, "summary": "Conversation."}
+                )
+                first = await message_repository.insert_async(
+                    {
+                        "node_id": node.id,
+                        "sender": "user",
+                        "content": "First",
+                        "timestamp": datetime(2024, 1, 1, 12, 0),
+                    }
+                )
+                second = await message_repository.insert_async(
+                    {
+                        "node_id": node.id,
+                        "sender": "agent-1",
+                        "content": "Second",
+                        "timestamp": datetime(2024, 1, 1, 11, 0),
+                    }
+                )
+
+                await message_repository.update_async(first.id, {"position": 1})
+                await message_repository.update_async(second.id, {"position": 0})
+                messages = await message_repository.get_by_node_async(node.id)
+                assert [message.content for message in messages] == ["Second", "First"]
         finally:
             await event_repository.dispose()
             await message_repository.dispose()
@@ -277,6 +418,9 @@ class StubEventRepository:
             setattr(node, key, value)
         return node
 
+    async def delete_async(self, entity_id):
+        self.nodes = [node for node in self.nodes if node.id != entity_id]
+
 
 class StubMessageRepository:
     """In-memory message repository for framework-free business tests."""
@@ -288,6 +432,8 @@ class StubMessageRepository:
         if isinstance(entity, dict):
             entity = Message(**entity)
         entity.id = f"msg-{len(self.messages) + 1}"
+        if entity.position is None:
+            entity.position = len(await self.get_by_node_async(entity.node_id))
         self.messages.append(entity)
         return entity
 
@@ -295,7 +441,17 @@ class StubMessageRepository:
         return next((msg for msg in self.messages if msg.id == entity_id), None)
 
     async def get_by_node_async(self, node_id):
-        return [msg for msg in self.messages if msg.node_id == node_id]
+        messages = [msg for msg in self.messages if msg.node_id == node_id]
+        return sorted(
+            messages,
+            key=lambda message: (
+                getattr(message, "position", None)
+                if getattr(message, "position", None) is not None
+                else 0,
+                message.timestamp or datetime.min,
+                message.id,
+            ),
+        )
 
     async def update_async(self, entity_id, values):
         msg = await self.get_async(entity_id)
@@ -471,12 +627,12 @@ def test_manager_resolves_persona_node_limit_for_the_active_window():
 
 
 # ---------------------------------------------------------------------------
-# Task 3: God-Mode Stealth Editor & Cache Invalidation
+# Explicit timeline CRUD and message conversation management
 # ---------------------------------------------------------------------------
 
 
-def test_god_mode_edit_rewrites_node_silently_and_invalidates_cache():
-    """A stealth node rewrite must persist, list invisibly, and fire invalidation hooks."""
+def test_explicit_node_edit_updates_timeline_and_invalidates_cache():
+    """A normal node edit persists visibly and invalidates prompt context."""
     from business.memory.event_log_manager import EventLogManager
 
     manager = EventLogManager(
@@ -488,73 +644,134 @@ def test_god_mode_edit_rewrites_node_silently_and_invalidates_cache():
     manager.add_cache_invalidator(lambda: invalidation_hits.append("cache"))
 
     async def scenario():
-        node = await manager.append_node_async("Original memory.")
-        assert invalidation_hits == []
+        node = await manager.add_node_async("Original memory.")
+        invalidation_hits.clear()
 
-        updated = await manager.silent_edit_node_async(
+        updated = await manager.update_node_async(
             node.id,
-            summary="The accepted reality.",
+            summary="The corrected memory.",
         )
-        assert updated.summary == "The accepted reality."
+        assert updated.summary == "The corrected memory."
         assert invalidation_hits == ["cache"]
 
         timeline = await manager.list_timeline_async()
-        assert timeline[0].summary == "The accepted reality."
+        assert timeline[0].summary == "The corrected memory."
 
         with pytest.raises(LookupError):
-            await manager.silent_edit_node_async("missing-node", summary="Bogus.")
+            await manager.update_node_async("missing-node", summary="Bogus.")
 
     run(scenario())
 
 
-def test_god_mode_edit_rewrites_message_silently_and_detaches_audit():
-    """A stealth message rewrite must persist and trigger the invalidation hook."""
-    from business.memory.event_log_manager import EventLogManager
-
-    manager = EventLogManager(
-        event_repository=StubEventRepository(),
-        message_repository=StubMessageRepository(),
-        agent_repository=StubAgentRepository(),
-    )
-    invalidation_hits = []
-    manager.add_cache_invalidator(lambda: invalidation_hits.append("cache"))
-
-    async def scenario():
-        node = await manager.append_node_async("Walking in the rain.")
-        message = await manager.append_message_async(
-            node.id,
-            sender="user",
-            content="Tell me about yourself.",
-        )
-
-        updated = await manager.silent_edit_message_async(
-            message.id,
-            content="How did you sleep?",
-        )
-        assert updated.content == "How did you sleep?"
-        assert invalidation_hits == ["cache"]
-
-        timeline = await manager.list_timeline_async()
-        assert timeline[0].messages[0].content == "How did you sleep?"
-
-    run(scenario())
-
-
-def test_silent_edits_reject_invalid_partial_values():
-    """Silent edits must validate partial input and refuse empty changes."""
+def test_message_crud_supports_speaker_text_and_manual_timestamp():
+    """Messages can be added, explicitly edited, and given a conversation time."""
     from business.memory.event_log_manager import EventLogManager
 
     manager = _memory_manager()
 
     async def scenario():
-        with pytest.raises(ValueError):
-            await manager.silent_edit_node_async("node-x", summary="   ")
+        node = await manager.add_node_async("A conversation happened.")
+        first_time = datetime(2024, 5, 4, 10, 30)
+        message = await manager.append_message_async(
+            node.id,
+            sender="user",
+            content="What happened?",
+            timestamp=first_time,
+        )
+        assert message.sender == "user"
+        assert message.timestamp == first_time
+        assert message.position == 0
 
-        with pytest.raises(ValueError):
-            await manager.silent_edit_message_async("msg-x", content="   ")
+        with pytest.raises(ValueError, match="selected agent"):
+            await manager.append_message_async(node.id, "other", "Not allowed.")
 
-        node = await manager.append_node_async("Keep me.")
+        second_time = datetime(2024, 5, 4, 10, 35)
+        updated = await manager.update_message_async(
+            message.id,
+            sender="agent-1",
+            content="I remembered the garden.",
+            timestamp=second_time,
+        )
+        assert updated.sender == "agent-1"
+        assert updated.content == "I remembered the garden."
+        assert updated.timestamp == second_time
+
+        await manager.delete_message_async(message.id)
+        timeline = await manager.list_timeline_async()
+        assert timeline[0].messages == []
+
+    run(scenario())
+
+
+def test_messages_can_reorder_and_move_between_nodes():
+    """Explicit message positions support up/down movement and node reassignment."""
+    manager = _memory_manager()
+
+    async def scenario():
+        first_node = await manager.add_node_async("First node.")
+        second_node = await manager.add_node_async("Second node.")
+        first = await manager.append_message_async(first_node.id, "user", "One")
+        second = await manager.append_message_async(first_node.id, "agent-1", "Two")
+        third = await manager.append_message_async(first_node.id, "user", "Three")
+
+        await manager.move_message_position_async(third.id, "up")
+        timeline = await manager.list_timeline_async()
+        assert [message.content for message in timeline[0].messages] == [
+            "One",
+            "Three",
+            "Two",
+        ]
+        assert [message.position for message in timeline[0].messages] == [0, 1, 2]
+
+        await manager.move_message_async(third.id, second_node.id)
+        timeline = await manager.list_timeline_async()
+        assert [message.content for message in timeline[0].messages] == ["One", "Two"]
+        assert [message.content for message in timeline[1].messages] == ["Three"]
+        assert timeline[1].messages[0].position == 0
+
+    run(scenario())
+
+
+def test_node_deletion_requires_all_messages_to_be_removed_or_moved():
+    """A node cannot be deleted until its message collection is empty."""
+    manager = _memory_manager()
+
+    async def scenario():
+        source = await manager.add_node_async("Source node.")
+        target = await manager.add_node_async("Target node.")
+        message = await manager.append_message_async(source.id, "user", "Move me.")
+
+        with pytest.raises(ValueError, match="messages"):
+            await manager.delete_node_async(source.id)
+
+        await manager.move_message_async(message.id, target.id)
+        await manager.delete_node_async(source.id)
+        timeline = await manager.list_timeline_async()
+        assert [node.summary for node in timeline] == ["Target node."]
+
+    run(scenario())
+
+
+def test_timeline_mutations_reject_invalid_values():
+    """CRUD methods reject missing records, blank fields, and invalid directions."""
+    manager = _memory_manager()
+
+    async def scenario():
+        with pytest.raises(LookupError):
+            await manager.update_node_async("missing-node", summary="Nope.")
+
+        node = await manager.add_node_async("Keep me.")
         with pytest.raises(ValueError):
-            await manager.silent_edit_node_async(node.id)
+            await manager.update_node_async(node.id, summary="   ")
+        with pytest.raises(ValueError):
+            await manager.update_node_async(node.id)
+
+        message = await manager.append_message_async(node.id, "user", "Hello.")
+        with pytest.raises(ValueError):
+            await manager.update_message_async(message.id, content="   ")
+        with pytest.raises(ValueError):
+            await manager.move_message_position_async(message.id, "sideways")
+        with pytest.raises(LookupError):
+            await manager.delete_message_async("missing-message")
 
     run(scenario())

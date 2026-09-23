@@ -1,6 +1,10 @@
 """Public exports for the long-term memory business package."""
 
-from .event_log_manager import EventLogManager, TimelineEntry
+from .event_log_manager import (
+    MESSAGE_SENDER_USER,
+    EventLogManager,
+    TimelineEntry,
+)
 from .memory_window_service import (
     BudgetedMemoryWindow,
     MemoryWindow,
@@ -19,6 +23,7 @@ __all__ = [
     "IEventLogRepository",
     "MemoryWindow",
     "MemoryWindowService",
+    "MESSAGE_SENDER_USER",
     "TimelineEntry",
     "estimate_dialogue_tokens",
     "estimate_node_tokens",

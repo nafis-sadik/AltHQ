@@ -48,12 +48,19 @@ The codebase strictly adheres to a 3-layer architecture to decouple business log
 
 ### B. Time-Series Event Log ("Line of Truth") & Sliding Window
 
-- **Long-Term Memory Structure:** Notable agent experiences and activities are recorded as time-series nodes in an event graph, with relevant historical chat messages attached as child nodes.
-- **Sliding Window Token Budgeting:** Enforces a configurable **fixed max active node size** to manage token constraints.
-- **God-Mode Stealth Editor:** Users can update past nodes and messages directly via the dashboard. Layer 3 writes these updates *without* generating audit logs or system edit markers, ensuring the agent accepts edited historical realities as absolute truth.
-- **Cache Invalidation:** Any stealth edit triggers an immediate cache invalidation hook, forcing Layer 2 to recompile the active prompt window on the next execution cycle.
+- **Long-Term Memory Structure:** Notable agent experiences and activities are recorded as a plain chronological list of time-series nodes, with relevant historical chat messages attached as child records.
+- **Explicit Timeline Editing:** Users can add, edit, and delete nodes through ordinary visible CRUD operations. A node deletion is rejected while any messages remain attached.
+- **Message Conversation Management:** Each message records its speaker, content, user-editable conversation time, and explicit per-node position. Users can edit, delete, reorder, or move a message to another node.
+- **Sliding Window Token Budgeting:** The internal prompt-context window enforces a configurable **fixed max active node size** without changing the visible Line of Truth list.
+- **Cache Invalidation:** Every explicit node or message mutation triggers an immediate cache invalidation hook, forcing Layer 2 to recompile prompt context on the next execution cycle.
 
-### C. Provider Agnostic LLM Routing
+### C. Multi-Agent Isolation
+
+- Every Line of Truth query is scoped to the selected `Agent` row.
+- The dashboard exposes an agent switcher and carries the selected `agent_id` through edit and message operations.
+- Cross-agent node/message mutations are rejected by the Layer 2 service.
+
+### D. Provider Agnostic LLM Routing
 
 - Implements the **Strategy Pattern** via an abstract `BaseProvider` interface.
 - Concrete implementations wrap **Ollama** (local inference) and **OpenRouter** (cloud routing), allowing seamless plug-and-play of new LLM backends without altering Layer 2 business logic.
@@ -62,11 +69,19 @@ The codebase strictly adheres to a 3-layer architecture to decouple business log
 
 ## 4. Data Storage & Persistence Schema
 
+### Line of Truth Records
+
+- `event_log_nodes` are ordered by their chronological `sequence_index` and are visible as a plain node list. `agent_id` is a foreign key to `agents.id` with cascade deletion when an agent is removed.
+- `messages` belong to a node through a foreign key to `event_log_nodes.id` and store `sender`, `content`, a user-editable conversation `timestamp`, and a per-node `position` used for explicit up/down ordering. The sender is restricted to the local user or the selected agent.
+- Moving a message changes only its owning node and sequence position; the user can then correct its conversation timestamp manually.
+- A node deletion is rejected by both the business service and the concrete event repository while any child message exists.
+
 ### SQLite3 Configuration
 
 - **Concurrency Protection:** SQLite connections must explicitly initialize with Write-Ahead Logging enabled to support background asynchronous agent loops writing logs concurrently with user dashboard activity:
 ```sql
 PRAGMA journal_mode = WAL;
 PRAGMA busy_timeout = 5000;
+PRAGMA foreign_keys = ON;
 
 ```

@@ -1,4 +1,4 @@
-"""SQLite engine initializer enforcing WAL journaling and busy timeouts for background concurrency."""
+"""SQLite engine initializer enforcing WAL, busy timeouts, and foreign keys."""
 
 from typing import Any
 
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 _WAL_PRAGMAS = (
     "PRAGMA journal_mode=WAL;",
     "PRAGMA busy_timeout=5000;",
+    "PRAGMA foreign_keys=ON;",
 )
 
 
@@ -21,10 +22,10 @@ def _apply_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:
 
 
 def attach_sqlite_pragmas(engine: AsyncEngine) -> AsyncEngine:
-    """Attach WAL-mode and busy-timeout pragmas to an existing async engine.
+    """Attach WAL, busy-timeout, and foreign-key pragmas to an async engine.
 
     Every DBAPI connection created by the engine's pool afterwards runs the
-    pragmas on connect, so pooled connections always honor WAL journaling.
+    pragmas on connect, so pooled connections always honor the same settings.
 
     Args:
         engine: The ``AsyncEngine`` to configure in place.

@@ -1,12 +1,12 @@
 # Phase 3 Specification: Dashboard, Auth & Model Provider Integration
 
 ## 1. Objective & Scope
-- **Core Goal:** Wrap the core engine (Layers 2 & 3) in a web framework (Flask/FastAPI), build the server-side rendered Bootstrap 5 + jQuery dashboard, integrate Auth0/OAuth authentication, implement the God-Mode history editor UI, and establish LLM provider connectivity (Ollama & OpenRouter).
+- **Core Goal:** Wrap the core engine (Layers 2 & 3) in a web framework (Flask/FastAPI), build the server-side rendered Bootstrap 5 + jQuery dashboard, integrate Auth0/OAuth authentication, implement the explicit Line of Truth history editor UI, and establish LLM provider connectivity (Ollama & OpenRouter).
 - **In-Scope Deliverables:**
   - Layer 1 application setup (Flask or FastAPI) with MVC blueprint structure.
   - 3rd-party OAuth/Auth0 integration handling secure login, session management, 2FA, and password recovery.
   - Server-side rendered Bootstrap 5 views with jQuery async triggers for managing persona settings (name, bio, background story, and prompt window size slider).
-  - God-Mode history editor interface allowing users to view and silently edit past event log nodes and messages.
+  - Explicit history editor interface allowing users to view and edit event log nodes and messages, including message order and node reassignment.
   - Provider Strategy Pattern implementation (`BaseProvider` -> `OllamaProvider` and `OpenRouterProvider`) for model execution via user API tokens.
 - **Out-of-Scope:** Termux background daemonization, OS app hooks (Telegram/WhatsApp), and the plugin marketplace backend.
 
@@ -30,9 +30,9 @@
   - [ ] Protect dashboard routes with session authentication middleware.
 
 - [ ] **Task 3: Bootstrap 5 & jQuery Agent Dashboard (Layer 1)**
-  - [ ] Build the main dashboard view for editing persona configuration (name, gender, bio, background story).
+  - [ ] Build the main dashboard view for switching between multiple Agent personas and editing the selected persona configuration (name, gender, bio, background story).
   - [ ] Implement the prompt sliding window sizing slider with AJAX/jQuery background updates.
-  - [ ] Build the interactive God-Mode Event Log viewer and inline message editor.
+  - [ ] Build the interactive Line of Truth viewer for the selected Agent with explicit node and message CRUD, fixed User/Agent speaker selection, ordering, and reassignment controls.
 
 - [ ] **Task 4: LLM Provider Strategy Implementation (Layer 2)**
   - [ ] Define abstract `BaseProvider` interface with an execution method.
