@@ -2,6 +2,19 @@
 
 # Phase 1 Specification: Persona Engine & Profile Management
 
+> ## ✅ STATUS: COMPLETE
+> **Progress:** 4/4 tasks · 100% of checklist items
+> **Last updated:** 2026-09-23
+> **Exit gate:** `python -m pytest tests/test_phase_1.py` + `tests/test_phase_1_ui.py` — **PASSING**
+> **Next step:** Phase 2 event-log work is delivered; proceed to Phase 3.
+
+| Task | Title | Status |
+| ---- | ----- | ------ |
+| 1 | Database & Persistence Setup (Layer 3) | ✅ Done |
+| 2 | Local JSON Config Manager (Layer 3) | ✅ Done |
+| 3 | Persona Business Core (Layer 2) | ✅ Done |
+| 4 | Unit Testing & Verification | ✅ Done |
+
 ## 1. Objective & Scope
 - **Core Goal:** Establish the data persistence layer, SQLAlchemy models, generic repositories, and framework-independent business logic for managing the agent's identity, metadata, character sheet, and local runtime configuration.
 - **In-Scope Deliverables:**
