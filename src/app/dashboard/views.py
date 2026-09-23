@@ -80,6 +80,109 @@ def persona_edit(request):
     return redirect("dashboard:index")
 
 
+def event_log(request):
+    """Render the long-term memory timeline via the Layer 2 event log manager."""
+    persona = run_async(container.persona_service().get_persona())
+    timeline = []
+    memory_window = None
+
+    if persona is not None:
+        timeline = run_async(
+            container.event_log_manager().list_timeline_async(persona.id)
+        )
+        memory_window = run_async(
+            container.event_log_manager().get_memory_window_async(persona.id)
+        )
+
+    return render(
+        request,
+        "dashboard/event_log.html",
+        {
+            "persona": persona,
+            "timeline": timeline,
+            "memory_window": memory_window,
+            "active_node_limit": (
+                persona.active_node_limit if persona is not None else None
+            ),
+        },
+    )
+
+
+@require_POST
+def event_node_create(request):
+    """Persist a new event log node through the Layer 2 event log manager."""
+    persona = run_async(container.persona_service().get_persona())
+    if persona is None:
+        return JsonResponse({"ok": False, "errors": ["Create a persona first."]}, status=404)
+
+    summary = request.POST.get("summary", "").strip()
+    try:
+        node = run_async(
+            container.event_log_manager().append_node_async(
+                summary,
+                agent_id=persona.id,
+            )
+        )
+    except ValueError as validation_error:
+        return JsonResponse(
+            {"ok": False, "errors": str(validation_error).split("; ")},
+            status=422,
+        )
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "node": {
+                "id": node.id,
+                "sequence_index": node.sequence_index,
+                "summary": node.summary,
+            },
+        }
+    )
+
+
+@require_POST
+def event_node_edit(request, node_id: str):
+    """Apply a silent God-Mode edit to a past event node via the Layer 2 manager.
+
+    The update bypasses audit rows and forces prompt-cache invalidation, so the
+    next execution cycle recompiles the active memory window.
+    """
+    summary = request.POST.get("summary")
+    is_active_raw = request.POST.get("is_active")
+
+    is_active = None
+    if is_active_raw is not None and is_active_raw != "":
+        is_active = is_active_raw.strip().lower() in ("1", "true", "yes", "on")
+
+    try:
+        node = run_async(
+            container.event_log_manager().silent_edit_node_async(
+                node_id,
+                summary=summary,
+                is_active=is_active,
+            )
+        )
+    except ValueError as validation_error:
+        return JsonResponse(
+            {"ok": False, "errors": str(validation_error).split("; ")},
+            status=422,
+        )
+    except LookupError as missing:
+        return JsonResponse({"ok": False, "errors": [str(missing)]}, status=404)
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "node": {
+                "id": node.id,
+                "summary": node.summary,
+                "is_active": node.is_active,
+            },
+        }
+    )
+
+
 @require_POST
 def persona_create(request):
     """Validate and persist a new persona through the Layer 2 service."""

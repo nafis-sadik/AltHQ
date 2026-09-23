@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -95,3 +95,79 @@ class CharacterSheet(Base):
             f"CharacterSheet(id={self.id!r}, agent_id={self.agent_id!r}, "
             f"original_filename={self.original_filename!r})"
         )
+
+
+class EventLogNode(Base):
+    """Time-series event node recording a notable agent experience ("line of truth")."""
+
+    __tablename__ = "event_log_nodes"
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        default=lambda: uuid.uuid4().hex,
+    )
+    agent_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    sequence_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    def __repr__(self) -> str:
+        """Return a compact debug representation of the node row."""
+        return (
+            f"EventLogNode(id={self.id!r}, agent_id={self.agent_id!r}, "
+            f"sequence_index={self.sequence_index!r}, is_active={self.is_active!r})"
+        )
+
+    def to_dict(self) -> dict:
+        """Return the node state as a plain dictionary for prompt compilation."""
+        return {
+            "id": self.id,
+            "agent_id": self.agent_id,
+            "sequence_index": self.sequence_index,
+            "summary": self.summary,
+            "timestamp": self.timestamp,
+            "is_active": self.is_active,
+        }
+
+
+class Message(Base):
+    """Dialogue message attached to an event node as a child record."""
+
+    __tablename__ = "messages"
+
+    id: Mapped[str] = mapped_column(
+        String(32),
+        primary_key=True,
+        default=lambda: uuid.uuid4().hex,
+    )
+    node_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    sender: Mapped[str] = mapped_column(String(60), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        server_default=func.current_timestamp(),
+    )
+
+    def __repr__(self) -> str:
+        """Return a compact debug representation of the message row."""
+        return (
+            f"Message(id={self.id!r}, node_id={self.node_id!r}, "
+            f"sender={self.sender!r})"
+        )
+
+    def to_dict(self) -> dict:
+        """Return the message state as a plain dictionary for prompt compilation."""
+        return {
+            "id": self.id,
+            "node_id": self.node_id,
+            "sender": self.sender,
+            "content": self.content,
+            "timestamp": self.timestamp,
+        }

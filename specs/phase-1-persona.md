@@ -23,20 +23,20 @@
 
 ## 3. Implementation Tasks & Checklist
 
-- [ ] **Task 1: Database & Persistence Setup (Layer 3)**
-  - [ ] Implement SQLite engine initializer with `PRAGMA journal_mode=WAL;` and `PRAGMA busy_timeout=5000;`.
-  - [ ] Create the Generic Base Repository class supporting standard CRUD (`get_by_id`, `add`, `update`, `delete`).
-  - [ ] Define SQLAlchemy model for `agents` (fields: `id`, `name`, `gender`, `profile_picture`, `bio`, `background_story`, `active_node_limit`, `created_at`, `updated_at`).
+- [x] **Task 1: Database & Persistence Setup (Layer 3)**
+  - [x] Implement SQLite engine initializer with `PRAGMA journal_mode=WAL;` and `PRAGMA busy_timeout=5000;`.
+  - [x] Create the Generic Base Repository class supporting standard CRUD (`get_by_id`, `add`, `update`, `delete`).
+  - [x] Define SQLAlchemy model for `agents` (fields: `id`, `name`, `gender`, `profile_picture`, `bio`, `background_story`, `active_node_limit`, `created_at`, `updated_at`).
 
-- [ ] **Task 2: Local JSON Config Manager (Layer 3)**
-  - [ ] Build a robust file handler utility to read/write default local settings to `config.json`.
+- [x] **Task 2: Local JSON Config Manager (Layer 3)**
+  - [x] Build a robust file handler utility to read/write default local settings to `config.json`.
 
-- [ ] **Task 3: Persona Business Core (Layer 2)**
-  - [ ] Implement `PersonaService` class in pure Python (framework-agnostic).
-  - [ ] Write methods to update character metadata, validate bio constraints, and compile base persona prompt segments.
+- [x] **Task 3: Persona Business Core (Layer 2)**
+  - [x] Implement `PersonaService` class in pure Python (framework-agnostic).
+  - [x] Write methods to update character metadata, validate bio constraints, and compile base persona prompt segments.
 
-- [ ] **Task 4: Unit Testing & Verification**
-  - [ ] Write a standalone test script (`tests/test_phase_1.py`) validating repository CRUD operations and persona state serialization without launching a web server.
+- [x] **Task 4: Unit Testing & Verification**
+  - [x] Write a standalone test script (`tests/test_phase_1.py`) validating repository CRUD operations and persona state serialization without launching a web server.
 
 ---
 

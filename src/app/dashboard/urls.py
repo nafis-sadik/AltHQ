@@ -8,6 +8,9 @@ app_name = "dashboard"
 
 urlpatterns = [
     path("", views.index, name="index"),
+    path("events/", views.event_log, name="event_log"),
+    path("api/events/create/", views.event_node_create, name="event_node_create"),
+    path("api/events/<str:node_id>/edit/", views.event_node_edit, name="event_node_edit"),
     path("persona/new/", views.persona_edit, name="persona_new"),
     path("persona/create/", views.persona_create, name="persona_create"),
     path("api/persona/update/", views.persona_update, name="persona_update"),

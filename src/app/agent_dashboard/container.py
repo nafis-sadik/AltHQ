@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from agent_dashboard.settings import BASE_DIR
+from business.memory import EventLogManager
 from business.persona import (
     CharacterSheetService,
     NullImageProvider,
@@ -16,7 +17,9 @@ from business.persona import (
 from core.repositories import JsonConfigRepository
 from core.repositories.agent_repository import AgentRepository
 from core.repositories.character_sheet_repository import CharacterSheetRepository
+from core.repositories.event_log_repository import EventLogRepository
 from core.repositories.file_storage_repository import FileStorageRepository
+from core.repositories.message_repository import MessageRepository
 
 
 class Container:
@@ -30,6 +33,9 @@ class Container:
         self._storage = None
         self._service = None
         self._sheet_service = None
+        self._event_repository = None
+        self._message_repository = None
+        self._event_log_manager = None
         self._initialized = False
 
     def _ensure_initialized(self) -> None:
@@ -47,10 +53,17 @@ class Container:
         if not os.path.isabs(db_path):
             db_path = str(config_dir / db_path)
 
-        # Touch the entity module so its table is registered on the shared metadata.
-        from core.dtos.db_entities import Agent  # noqa: F401
+        # Touch the entity module so every table is registered on the shared metadata.
+        from core.dtos.db_entities import (  # noqa: F401
+            Agent,
+            CharacterSheet,
+            EventLogNode,
+            Message,
+        )
 
         self._repository = AgentRepository(f"sqlite+aiosqlite:///{db_path}")
+        self._event_repository = EventLogRepository(f"sqlite+aiosqlite:///{db_path}")
+        self._message_repository = MessageRepository(f"sqlite+aiosqlite:///{db_path}")
 
         # Bootstrap the schema so a fresh deployment can serve requests immediately.
         import asyncio
@@ -62,6 +75,12 @@ class Container:
             bootstrap_loop.close()
 
         self._service = PersonaService(repository=self._repository, config=self._config)
+
+        self._event_log_manager = EventLogManager(
+            event_repository=self._event_repository,
+            message_repository=self._message_repository,
+            agent_repository=self._repository,
+        )
 
         sheets_dir = str(config_dir / "sheets")
         self._storage = FileStorageRepository(sheets_dir)
@@ -88,6 +107,11 @@ class Container:
         self._ensure_initialized()
         return self._sheet_service
 
+    def event_log_manager(self) -> EventLogManager:
+        """Return the shared event log business service."""
+        self._ensure_initialized()
+        return self._event_log_manager
+
     def storage(self) -> FileStorageRepository:
         """Return the shared file storage repository."""
         self._ensure_initialized()
@@ -99,7 +123,12 @@ class Container:
         # pooled aiosqlite connections stay open and lock the database file.
         from dashboard.async_utils import run_async
 
-        for repository in (self._repository, self._sheet_repository):
+        for repository in (
+            self._repository,
+            self._sheet_repository,
+            self._event_repository,
+            self._message_repository,
+        ):
             if repository is not None:
                 if repository._session is not None:
                     run_async(repository._session.close())
@@ -111,6 +140,9 @@ class Container:
         self._storage = None
         self._service = None
         self._sheet_service = None
+        self._event_repository = None
+        self._message_repository = None
+        self._event_log_manager = None
         self._initialized = False
 
 

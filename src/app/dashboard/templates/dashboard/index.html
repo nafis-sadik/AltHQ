@@ -18,6 +18,10 @@
   <nav class="navbar navbar-dark border-bottom border-secondary">
     <div class="container">
       <span class="navbar-brand mb-0">🤖 Autonomous Agent — Persona Dashboard</span>
+      <span class="ms-auto d-flex align-items-center gap-3">
+        <a class="nav-link p-0 active" href="{% url 'dashboard:index' %}">Persona</a>
+        <a class="nav-link p-0" href="{% url 'dashboard:event_log' %}">Event Log</a>
+      </span>
       <span class="badge text-bg-secondary">Layer 1 · Django</span>
       <span class="badge text-bg-secondary">WAL SQLite</span>
     </div>

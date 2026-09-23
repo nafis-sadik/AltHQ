@@ -21,21 +21,21 @@
 
 ## 3. Implementation Tasks & Checklist
 
-- [ ] **Task 1: Event Log & Message Schema (Layer 3)**
-  - [ ] Define SQLAlchemy model for `event_log_nodes` (fields: `id`, `agent_id`, `sequence_index`, `summary`, `timestamp`, `is_active`).
-  - [ ] Define SQLAlchemy model for `messages` (fields: `id`, `node_id`, `sender`, `content`, `timestamp`).
-  - [ ] Implement concrete repositories `EventLogRepository` and `MessageRepository`.
+- [x] **Task 1: Event Log & Message Schema (Layer 3)**
+  - [x] Define SQLAlchemy model for `event_log_nodes` (fields: `id`, `agent_id`, `sequence_index`, `summary`, `timestamp`, `is_active`).
+  - [x] Define SQLAlchemy model for `messages` (fields: `id`, `node_id`, `sender`, `content`, `timestamp`).
+  - [x] Implement concrete repositories `EventLogRepository` and `MessageRepository`.
 
-- [ ] **Task 2: Sliding-Window Memory Engine (Layer 2)**
-  - [ ] Build `MemoryWindowService` to slice active event nodes based on the user-configured prompt window size.
-  - [ ] Implement token estimation and budgeting rules to separate active sliding nodes from archived history.
+- [x] **Task 2: Sliding-Window Memory Engine (Layer 2)**
+  - [x] Build `MemoryWindowService` to slice active event nodes based on the user-configured prompt window size.
+  - [x] Implement token estimation and budgeting rules to separate active sliding nodes from archived history.
 
-- [ ] **Task 3: God-Mode Stealth Editor & Cache Invalidation (Layer 2 & 3)**
-  - [ ] Implement silent update methods that alter historical node summaries or messages without generating audit logs.
-  - [ ] Build an observer/callback cache invalidation trigger that forces prompt recompilation on the next execution loop when an edit occurs.
+- [x] **Task 3: God-Mode Stealth Editor & Cache Invalidation (Layer 2 & 3)**
+  - [x] Implement silent update methods that alter historical node summaries or messages without generating audit logs.
+  - [x] Build an observer/callback cache invalidation trigger that forces prompt recompilation on the next execution loop when an edit occurs.
 
-- [ ] **Task 4: Unit Testing & Verification**
-  - [ ] Write a standalone test script (`tests/test_phase_2.py`) simulating a growing timeline, verifying sliding window truncation, testing a silent God-Mode edit, and confirming prompt cache invalidation.
+- [x] **Task 4: Unit Testing & Verification**
+  - [x] Write a standalone test script (`tests/test_phase_2.py`) simulating a growing timeline, verifying sliding window truncation, testing a silent God-Mode edit, and confirming prompt cache invalidation.
 
 ---
 

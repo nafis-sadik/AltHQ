@@ -379,6 +379,7 @@ def test_layer2_imports_load_no_framework_modules():
     snippet = (
         "import sys; sys.path.insert(0, r'{src}'); "
         "from business.persona.persona_service import PersonaService; "
+        "from business.memory.event_log_manager import EventLogManager; "
         "banned = [m for m in sys.modules if m.split('.')[0] in "
         "('sqlalchemy', 'aiosqlite', 'flask', 'fastapi', 'tinydb', 'unqlite')]; "
         "sys.exit(1 if banned else 0)"
