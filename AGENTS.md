@@ -1,6 +1,7 @@
 # AI Agent Instructions for Personal AI Agent Framework
 
-## 1. Core Architectural Laws (The 3-Layer Rule)
+## 1. Core Architectural Laws (The 3-Layer Rule & Vertical Slicing)
+- **Vertical Slicing Mandate:** Every sprint or phase **must deliver a fully working vertical slice** touching all three layers simultaneously (`src/app`, `src/business`, and `src/core`). Never build an entire layer in isolation before moving to the next. Every feature increment must include its persistence, business logic, and UI routes together.
 - **Layer 2 (Business Logic) is 100% Framework-Independent:** Never import Flask, FastAPI, SQLAlchemy, or web frameworks into `src/business (layer # 2)/`. It must communicate with storage solely through Layer 3 repository interfaces.
 - **Layer 1 (Application):** Handles HTTP, routing, and UI views in `src/app (layer # 1)/`, delegating all execution flow and business logic to Layer 2.
 - **Layer 3 (Persistence & Core):** Manages database connections, file handles, DTOs (`src/core (layer # 3)/dtos`), and repositories (`src/core (layer # 3)/repositories`) for SQLite, TinyDB, and other unmanaged resources.

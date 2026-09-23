@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Local databases and environment
+*.db
+*.db-wal
+*.db-shm
+.env
+
+# Virtual environments
+venv/
+.venv/
+runserver.log
+runserver.log

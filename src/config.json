@@ -1,0 +1,9 @@
+{
+  "database_path": "agent.db",
+  "log_level": "INFO",
+  "default_active_node_limit": 20,
+  "runtime": {
+    "language": "de",
+    "timezone": "UTC"
+  }
+}
