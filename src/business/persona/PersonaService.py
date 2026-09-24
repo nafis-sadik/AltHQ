@@ -53,10 +53,8 @@ class PersonaService(IPersonaService):
             raise ValueError("update contains no persona changes.")
 
         try:
-            return await self._persona_repository.update_async(
-                agent_id,
-                result.normalized.to_dict(),
-            )
+            entity = await self._persona_repository.update_async(agent_id, result.normalized.to_dict())
+            return PersonaUpdate.to_dto(entity)
         except ValueError as missing:
             raise LookupError("Persona not found.") from missing
 
@@ -99,32 +97,23 @@ class PersonaService(IPersonaService):
 
     async def GetByIdAsync(self, agent_id: Optional[str] = None) -> Optional[Agent]:
         """Return one persona row, resolving the default persona when no id is given."""
-        async with self._persona_repository:
-            if agent_id is not None:
-                return await self._persona_repository.get_async(agent_id)
-            return await self._first_persona_async()
-
-    async def _first_persona_async(self) -> Optional[Agent]:
-        """Return the first persona row for agent-switcher default selection."""
-        personas: List[Agent] = await self._persona_repository.get_all_async()
-        if not personas:
-            return None
-        return sorted(
-            personas,
-            key=lambda persona: (str(persona.name).casefold(), str(persona.id)),
-        )[0]
+        if agent_id is not None:
+            return await self._persona_repository.get_async(agent_id)
+        return None  # Default persona resolution can be implemented here if needed
 
     def ValidatePersona(self, update: PersonaUpdate) -> PersonaValidationResult:
         """Validate and normalize an incoming persona update without touching storage."""
         return validate_persona_update(update)
 
-    def CompilePromptSegments(self, persona: Any) -> PersonaPromptSegments:
+    def CompilePromptSegments(self, persona: Agent) -> PersonaPromptSegments:
         """Compile a stored persona row into prompt segments for prompt assembly."""
         return PersonaPromptSegments(
             identity=f"{persona.name} ({persona.gender})",
             bio=persona.bio,
             background_story=persona.background_story,
             active_node_limit=persona.active_node_limit,
+            # recent_messages=persona.recent_messages,
+            # vector_search_results=persona.vector_search_results,
         )
 
     async def CompileBasePrompt(self) -> PersonaPromptSegments:

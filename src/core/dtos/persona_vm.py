@@ -14,6 +14,9 @@ class PersonaPromptSegments:
     background_story: str
     active_node_limit: int
 
+    recent_messages: Optional[List[str]] = field(default_factory=list)
+    vector_search_results: Optional[List[str]] = field(default_factory=list)
+
     def as_prompt_blocks(self) -> List[str]:
         """Return the persona as ordered prompt blocks ready for LLM prompt assembly."""
         return [
@@ -61,7 +64,7 @@ class PersonaUpdate:
         )
 
     @staticmethod
-    def to_dto(entity: Agent) -> "PersonaUpdate":
+    def to_dto(entity: Agent) -> PersonaUpdate:
         """Return a PersonaUpdate DTO from an Agent entity."""
         return PersonaUpdate(
             id=entity.id,
