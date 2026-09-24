@@ -2,6 +2,8 @@
 
 from abc import ABC, abstractmethod
 from typing import Any, Generic, List, Optional, Sequence, TypeVar
+from sqlalchemy import Result
+from sqlalchemy.sql import Select
 
 TEntity = TypeVar("TEntity")
 
@@ -24,11 +26,6 @@ class ISQLRepository(ABC, Generic[TEntity]):
         pass
 
     @abstractmethod
-    async def get_by_expression_async(self, criterion: Any) -> Sequence[TEntity]:
-        """Fetch every entity matching the given SQLAlchemy criterion."""
-        pass
-
-    @abstractmethod
     async def get_all_async(self) -> List[TEntity]:
         """Return every entity in the table."""
         pass
@@ -46,4 +43,19 @@ class ISQLRepository(ABC, Generic[TEntity]):
     @abstractmethod
     async def delete_async(self, entity_id: str) -> None:
         """Delete the entity with the given id."""
+        pass
+
+    @abstractmethod
+    def base_query(self) -> Select[tuple[TEntity]]:
+        """Start a query statement that can be dynamically modified later."""
+        pass
+
+    @abstractmethod
+    async def count_async(self, query: Select) -> int:
+        """Count the number of rows that would be returned by the given query."""
+        pass
+
+    @abstractmethod
+    async def execute_query_async(self, query: Select) -> Result[tuple[TEntity]]:
+        """Execute a given query and return the result."""
         pass

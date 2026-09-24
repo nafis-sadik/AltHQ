@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Create Persona — Agent Dashboard</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
   <style>
     body { background: #10141c; }
     .card { border: 1px solid #232b3b; }
@@ -19,7 +20,8 @@
         {% for error in errors %}<div>{{ error }}</div>{% endfor %}
       </div>
     {% endif %}
-    <form method="post" action="{% url 'dashboard:persona_create' %}" class="card">
+    <div id="error-box" class="alert alert-danger d-none" role="alert"></div>
+    <form method="post" action="{% url 'dashboard:persona_api' %}" class="card" id="persona-create-form">
       {% csrf_token %}
       <div class="card-body row g-3">
         <div class="col-md-6">
@@ -55,5 +57,41 @@
       </div>
     </form>
   </main>
+  <script>
+    function getCookie(name) {
+      let cookieValue = null;
+      if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+          const cookie = cookies[i].trim();
+          if (cookie.substring(0, name.length + 1) === (name + '=')) {
+            cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+            break;
+          }
+        }
+      }
+      return cookieValue;
+    }
+
+    $('#persona-create-form').on('submit', function (event) {
+      event.preventDefault();
+      const box = $('#error-box');
+      box.addClass('d-none');
+      $.ajax({
+        url: $(this).attr('action'),
+        method: 'POST',
+        data: $(this).serialize(),
+        headers: { 'X-CSRFToken': getCookie('csrftoken') },
+      }).done(function (data) {
+        window.location.href = data.redirect;
+      }).fail(function (xhr) {
+        const errors = xhr.responseJSON && xhr.responseJSON.errors;
+        box.removeClass('d-none').empty();
+        (errors || ['The request could not be completed.']).forEach(function (message) {
+          $('<div>').text(message).appendTo(box);
+        });
+      });
+    });
+  </script>
 </body>
 </html>

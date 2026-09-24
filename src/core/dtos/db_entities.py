@@ -1,5 +1,6 @@
 """Declarative database entities (Layer 3 DTOs) for the agent's persistence schema."""
 
+from enum import StrEnum
 import uuid
 from datetime import datetime
 
@@ -11,14 +12,13 @@ class Base(DeclarativeBase):
     """Shared declarative base that every database entity registers its table on."""
 
 
-class Gender:
+class Gender(StrEnum):
     """Canonical gender values accepted by the persona system."""
 
     MALE = "male"
     FEMALE = "female"
-    UNSPECIFIED = "unspecified"
-
-    ALL = (MALE, FEMALE, UNSPECIFIED)
+    NON_BINARY = "non_binary"
+    PREFER_NOT_TO_SAY = "prefer_not_to_say"
 
 
 class Agent(Base):
@@ -32,7 +32,7 @@ class Agent(Base):
         default=lambda: uuid.uuid4().hex,
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    gender: Mapped[str] = mapped_column(String(30), nullable=False)
+    gender: Mapped[Gender] = mapped_column(String(30), nullable=False)
     profile_picture: Mapped[str] = mapped_column(String(500), nullable=False)
     bio: Mapped[str] = mapped_column(Text, nullable=False)
     background_story: Mapped[str] = mapped_column(Text, nullable=False)

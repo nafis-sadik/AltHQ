@@ -162,6 +162,7 @@
       }
       return cookieValue;
     }
+    {% if persona %}
     const csrfToken = getCookie('csrftoken');
 
     function showAlert(kind, messages) {
@@ -172,8 +173,12 @@
 
     $('#persona-form').on('submit', function (event) {
       event.preventDefault();
-      $.post('{% url 'dashboard:persona_update' %}', $(this).serialize())
-        .done(function (data) { showAlert('success', ['Persona saved.']); })
+      $.ajax({
+        url: '{% url 'dashboard:persona_detail' persona.id %}',
+        method: 'PUT',
+        data: $(this).serialize(),
+        headers: { 'X-CSRFToken': csrfToken },
+      }).done(function (data) { showAlert('success', ['Persona saved.']); })
         .fail(function (xhr) { showAlert('danger', xhr.responseJSON.errors); });
     });
 
@@ -215,13 +220,14 @@
     $('.btn-delete-sheet').on('click', function () {
       const sheetId = $(this).data('sheet-id');
       $.ajax({
-        url: '/api/sheets/' + sheetId + '/delete/',
-        method: 'POST',
+        url: '/api/sheets/' + encodeURIComponent(sheetId) + '/',
+        method: 'DELETE',
         data: { agent_id: '{{ selected_agent.id }}' },
         headers: { 'X-CSRFToken': csrfToken },
       }).done(function (data) { location.reload(); })
         .fail(function (xhr) { showAlert('danger', xhr.responseJSON.errors); });
     });
+    {% endif %}
   </script>
 </body>
 </html>

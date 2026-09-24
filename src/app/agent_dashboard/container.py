@@ -14,20 +14,20 @@ from business.persona import (
     NullImageProvider,
     PersonaService,
 )
-from core.repositories import JsonConfigRepository
-from core.repositories.agent_repository import AgentRepository
-from core.repositories.character_sheet_repository import CharacterSheetRepository
-from core.repositories.event_log_repository import EventLogRepository
-from core.repositories.file_storage_repository import FileStorageRepository
-from core.repositories.message_repository import MessageRepository
+from core.db_engine import create_sqlite_engine
+from core.dtos.db_entities import Agent, CharacterSheet, EventLogNode, Message
+from core.repositories import FileStorageRepository, JsonConfigRepository
+from core.repositories.db_sql_repo.sql_alchemy_repository import SQLAlchemyRepository
+from dashboard.controllers import EventLogController, PersonaController
 
 
 class Container:
-    """Lazily builds and caches the shared config, repository, and service instances."""
+    """Lazily builds and caches the shared config, engine, repository, and service instances."""
 
     def __init__(self) -> None:
-        """Prepare lazy singletons for config, repositories, and services."""
+        """Prepare lazy singletons for config, repositories, services, and controllers."""
         self._config = None
+        self._engine = None
         self._repository = None
         self._sheet_repository = None
         self._storage = None
@@ -36,6 +36,8 @@ class Container:
         self._event_repository = None
         self._message_repository = None
         self._event_log_manager = None
+        self._persona_controller = None
+        self._event_log_controller = None
         self._initialized = False
 
     def _ensure_initialized(self) -> None:
@@ -53,34 +55,27 @@ class Container:
         if not os.path.isabs(db_path):
             db_path = str(config_dir / db_path)
 
-        # Touch the entity module so every table is registered on the shared metadata.
-        from core.dtos.db_entities import (  # noqa: F401
-            Agent,
-            CharacterSheet,
-            EventLogNode,
-            Message,
-        )
+        # One shared WAL-enabled engine; every repository reuses it.
+        self._engine = create_sqlite_engine(f"sqlite+aiosqlite:///{db_path}")
 
-        self._repository = AgentRepository(f"sqlite+aiosqlite:///{db_path}")
-        self._event_repository = EventLogRepository(f"sqlite+aiosqlite:///{db_path}")
-        self._message_repository = MessageRepository(f"sqlite+aiosqlite:///{db_path}")
+        self._repository = SQLAlchemyRepository[Agent](Agent, self._engine)
+        self._event_repository = SQLAlchemyRepository[EventLogNode](EventLogNode, self._engine)
+        self._message_repository = SQLAlchemyRepository[Message](Message, self._engine)
 
         # Bootstrap the schema so a fresh deployment can serve requests immediately.
+        # All entities share one metadata, so a single create creates every table.
         import asyncio
 
         bootstrap_loop = asyncio.new_event_loop()
         try:
-            bootstrap_loop.run_until_complete(self._repository.create_schema_async())
-            bootstrap_loop.run_until_complete(
-                self._event_repository.create_schema_async()
-            )
-            bootstrap_loop.run_until_complete(
-                self._message_repository.create_schema_async()
-            )
+            bootstrap_loop.run_until_complete(self._repository.create_schema())
         finally:
             bootstrap_loop.close()
 
-        self._service = PersonaService(repository=self._repository, config=self._config)
+        self._service = PersonaService(
+            persona_repository=self._repository,
+            config=self._config,
+        )
 
         self._event_log_manager = EventLogManager(
             event_repository=self._event_repository,
@@ -90,11 +85,24 @@ class Container:
 
         sheets_dir = str(config_dir / "sheets")
         self._storage = FileStorageRepository(sheets_dir)
-        self._sheet_repository = CharacterSheetRepository(f"sqlite+aiosqlite:///{db_path}")
+        self._sheet_repository = SQLAlchemyRepository[CharacterSheet](
+            CharacterSheet,
+            self._engine,
+        )
         self._sheet_service = CharacterSheetService(
             sheet_repository=self._sheet_repository,
             storage=self._storage,
             image_provider=NullImageProvider(),
+        )
+        self._persona_controller = PersonaController(
+            persona_service=self._service,
+            sheet_service=self._sheet_service,
+            config=self._config,
+            storage=self._storage,
+        )
+        self._event_log_controller = EventLogController(
+            persona_service=self._service,
+            event_log_service=self._event_log_manager,
         )
         self._initialized = True
 
@@ -118,6 +126,16 @@ class Container:
         self._ensure_initialized()
         return self._event_log_manager
 
+    def persona_controller(self) -> PersonaController:
+        """Return the persona domain controller with its services injected."""
+        self._ensure_initialized()
+        return self._persona_controller
+
+    def event_log_controller(self) -> EventLogController:
+        """Return the Line of Truth controller with its services injected."""
+        self._ensure_initialized()
+        return self._event_log_controller
+
     def storage(self) -> FileStorageRepository:
         """Return the shared file storage repository."""
         self._ensure_initialized()
@@ -125,22 +143,15 @@ class Container:
 
     def reset(self) -> None:
         """Dispose engines and drop cached singletons (used between tests)."""
-        # Dispose on the shared loop where the pools were created, otherwise
+        # Dispose on the shared loop where the pool was created, otherwise
         # pooled aiosqlite connections stay open and lock the database file.
         from dashboard.async_utils import run_async
 
-        for repository in (
-            self._repository,
-            self._sheet_repository,
-            self._event_repository,
-            self._message_repository,
-        ):
-            if repository is not None:
-                if repository._session is not None:
-                    run_async(repository._session.close())
-                run_async(repository._engine.dispose())
+        if self._engine is not None:
+            run_async(self._engine.dispose())
 
         self._config = None
+        self._engine = None
         self._repository = None
         self._sheet_repository = None
         self._storage = None
@@ -149,6 +160,8 @@ class Container:
         self._event_repository = None
         self._message_repository = None
         self._event_log_manager = None
+        self._persona_controller = None
+        self._event_log_controller = None
         self._initialized = False
 
 

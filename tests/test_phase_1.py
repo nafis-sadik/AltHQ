@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from core.dtos.db_entities import Agent
-from core.repositories.agent_repository import AgentRepository
 from core.repositories.json_config_repository import JsonConfigRepository
 from core.db_engine import create_sqlite_engine
+from core.repositories.db_sql_repo.sql_alchemy_repository import SQLAlchemyRepository
 from business.persona import (
     PersonaService,
     PersonaUpdate,
@@ -78,10 +78,12 @@ def test_agent_entity_schema_matches_spec():
     }
 
 
-def test_agent_repository_crud_roundtrip(db_url):
-    """add/get/update/delete must roundtrip a persona row through the repository."""
+def test_sql_repository_crud_roundtrip(db_url):
+    """add/get/update/delete must roundtrip a persona row through the generic repository."""
+    engine = create_sqlite_engine(db_url)
+    repository = SQLAlchemyRepository[Agent](Agent, engine)
+
     async def scenario():
-        repository = AgentRepository(db_url)
         try:
             await repository.create_schema()
             async with repository:
@@ -116,15 +118,21 @@ def test_agent_repository_crud_roundtrip(db_url):
     run(scenario())
 
 
-def test_agent_repository_get_default_agent_async(db_url):
-    """The default-persona helper must return the single row or None when empty."""
+def test_persona_service_resolves_default_persona(db_url):
+    """GetByIdAsync with no id must resolve the first persona, or None when empty."""
+    engine = create_sqlite_engine(db_url)
+    repository = SQLAlchemyRepository[Agent](Agent, engine)
+    service = PersonaService(
+        persona_repository=repository,
+        config=JsonConfigRepository(str(db_url) + ".json"),
+    )
+
     async def scenario():
-        repository = AgentRepository(db_url)
         try:
             await repository.create_schema()
-            async with repository:
-                assert await repository.get_default_agent_async() is None
+            assert await service.GetByIdAsync(None) is None
 
+            async with repository:
                 await repository.insert_async(
                     Agent(
                         name="Aria",
@@ -135,9 +143,9 @@ def test_agent_repository_get_default_agent_async(db_url):
                         active_node_limit=20,
                     )
                 )
-                persona = await repository.get_default_agent_async()
-                assert persona is not None
-                assert persona.name == "Aria"
+            persona = await service.GetByIdAsync(None)
+            assert persona is not None
+            assert persona.name == "Aria"
         finally:
             await repository.dispose()
 
@@ -186,6 +194,12 @@ class StubPersonaRepository:
     def __init__(self):
         self.rows = {}
         self.next_id = 1
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        pass
 
     async def insert_async(self, entity):
         if isinstance(entity, dict):
@@ -242,7 +256,10 @@ class StubRuntimeConfig:
 @pytest.fixture()
 def persona_service():
     """Provide a PersonaService wired to in-memory stubs."""
-    return PersonaService(repository=StubPersonaRepository(), config=StubRuntimeConfig())
+    return PersonaService(
+        persona_repository=StubPersonaRepository(),
+        config=StubRuntimeConfig(),
+    )
 
 
 def _sample_persona():
@@ -258,7 +275,7 @@ def _sample_persona():
 
 def test_persona_service_rejects_invalid_metadata(persona_service):
     """Blank, oversized, and malformed fields must fail validation with clear errors."""
-    result = persona_service.validate_update(
+    result = persona_service.ValidatePersona(
         PersonaUpdate(
             name="",
             gender="x" * 40,
@@ -275,7 +292,7 @@ def test_persona_service_rejects_invalid_metadata(persona_service):
 
 def test_persona_service_validates_and_normalizes_update(persona_service):
     """Valid input must normalize (trim) and keep every provided field."""
-    result = persona_service.validate_update(
+    result = persona_service.ValidatePersona(
         PersonaUpdate(
             name="  Aria Prime  ",
             gender=" female ",
@@ -285,7 +302,7 @@ def test_persona_service_validates_and_normalizes_update(persona_service):
         )
     )
     assert result.valid
-    values = result.normalized.to_repository_values()
+    values = result.normalized.to_dict()
     assert values["name"] == "Aria Prime"
     assert values["gender"] == "female"
     assert values["bio"] == "Warm. Curious. Loyal."
@@ -296,12 +313,12 @@ def test_persona_service_validates_and_normalizes_update(persona_service):
 def test_persona_service_enforces_configured_node_limit():
     """The configured maximum must cap the creation default and stay UI-readable."""
     service = PersonaService(
-        repository=StubPersonaRepository(),
+        persona_repository=StubPersonaRepository(),
         config=StubRuntimeConfig({"persona": {"max_active_node_limit": 60}}),
     )
 
     async def create():
-        return await service.create_persona(
+        return await service.AddNewAsync(
             PersonaUpdate(name="Cap Test", bio="Cap test persona.")
         )
 
@@ -311,11 +328,11 @@ def test_persona_service_enforces_configured_node_limit():
 
 
 def test_persona_service_update_persona_applies_changes(persona_service):
-    """update_persona must persist normalized changes through the injected repository."""
+    """UpdateExistingAsync must persist normalized changes through the injected repository."""
 
     async def scenario():
-        persona = await persona_service._repository.insert_async(_sample_persona())
-        updated = await persona_service.update_persona(
+        persona = await persona_service._persona_repository.insert_async(_sample_persona())
+        updated = await persona_service.UpdateExistingAsync(
             persona.id,
             PersonaUpdate(name="Aria Prime", active_node_limit=75),
         )
@@ -324,15 +341,18 @@ def test_persona_service_update_persona_applies_changes(persona_service):
         assert updated.bio == "A warm companion."
 
         with pytest.raises(ValueError):
-            await persona_service.update_persona(persona.id, PersonaUpdate(name="   "))
+            await persona_service.UpdateExistingAsync(
+                persona.id,
+                PersonaUpdate(name="   "),
+            )
 
     run(scenario())
 
 
 def test_persona_state_serialization_and_prompt_compilation(persona_service):
-    """compile_prompt_segments must produce ordered persona prompt blocks."""
+    """CompilePromptSegments must produce ordered persona prompt blocks."""
     persona = _sample_persona()
-    segments = persona_service.compile_prompt_segments(persona)
+    segments = persona_service.CompilePromptSegments(persona)
 
     assert segments.identity == "Aria (female)"
     assert segments.bio == "A warm companion."
@@ -348,23 +368,62 @@ def test_persona_state_serialization_and_prompt_compilation(persona_service):
 
 def test_persona_service_end_to_end_with_real_layer3(db_url, config_path):
     """PersonaService wired to the real Layer 3 stack must update and compile prompts."""
+    engine = create_sqlite_engine(db_url)
+    repository = SQLAlchemyRepository[Agent](Agent, engine)
+    service = PersonaService(
+        persona_repository=repository,
+        config=JsonConfigRepository(config_path),
+    )
+
     async def scenario():
-        repository = AgentRepository(db_url)
-        config = JsonConfigRepository(config_path)
-        service = PersonaService(repository=repository, config=config)
         try:
             await repository.create_schema()
             async with repository:
                 persona = await repository.insert_async(_sample_persona())
-                await service.update_persona(
+                await service.UpdateExistingAsync(
                     persona.id,
                     PersonaUpdate(bio="Rewritten with care."),
                 )
-                current = await service.get_persona(persona.id)
+                current = await service.GetByIdAsync(persona.id)
                 assert current.bio == "Rewritten with care."
 
-                segments = await service.compile_base_prompt()
+                segments = await service.CompileBasePrompt()
                 assert segments.identity.startswith("Aria")
+        finally:
+            await repository.dispose()
+
+    run(scenario())
+
+
+def test_persona_service_pages_personas_with_totals(db_url):
+    """GetPagedPersona must order by name and return paging totals."""
+    engine = create_sqlite_engine(db_url)
+    repository = SQLAlchemyRepository[Agent](Agent, engine)
+    service = PersonaService(
+        persona_repository=repository,
+        config=JsonConfigRepository(str(db_url) + ".json"),
+    )
+
+    async def scenario():
+        try:
+            await repository.create_schema()
+            async with repository:
+                for name in ("Zed", "Aria", "Moon"):
+                    await repository.insert_async(Agent(
+                        name=name,
+                        gender="female",
+                        profile_picture="assets/aria.png",
+                        bio="A warm companion.",
+                        background_story="Home lab origin.",
+                    ))
+
+            page = await service.GetPagedPersona(1, 2)
+            assert page.total_items == 3
+            assert [row.name for row in page.source_data] == ["Aria", "Moon"]
+            assert page.source_data[0].id
+
+            second_page = await service.GetPagedPersona(2, 2)
+            assert [row.name for row in second_page.source_data] == ["Zed"]
         finally:
             await repository.dispose()
 
@@ -377,13 +436,18 @@ def test_persona_service_end_to_end_with_real_layer3(db_url, config_path):
 
 
 def test_layer2_imports_load_no_framework_modules():
-    """Importing business logic must not load SQLAlchemy, aiosqlite, or any web framework."""
+    """Importing business logic must not load a web framework, NoSQL store, or driver.
+
+    Layer 2 reuses Layer 3 DTOs and the ``ISQLRepository`` interface, which pulls
+    in sqlalchemy core types; it still must stay free of any web framework, NoSQL
+    database store (tinydb/unqlite), or the aiosqlite driver.
+    """
     snippet = (
         "import sys; sys.path.insert(0, r'{src}'); "
-        "from business.persona.persona_service import PersonaService; "
-        "from business.memory.event_log_manager import EventLogManager; "
+        "from business.persona import PersonaService; "
+        "from business.memory import EventLogManager; "
         "banned = [m for m in sys.modules if m.split('.')[0] in "
-        "('sqlalchemy', 'aiosqlite', 'flask', 'fastapi', 'tinydb', 'unqlite')]; "
+        "('django', 'flask', 'fastapi', 'tinydb', 'unqlite', 'aiosqlite')]; "
         "sys.exit(1 if banned else 0)"
     ).format(src=str(Path(__file__).resolve().parents[1] / "src"))
 

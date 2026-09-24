@@ -1,12 +1,11 @@
 """Framework-independent character sheet management for persona reference images."""
 
+from datetime import datetime
 from typing import Any, List, Optional
 
-from business.persona.repository_protocols import (
-    ICharacterSheetRepository,
-    IFileStorage,
-    IImageProvider,
-)
+from business.persona.repository_protocols import IFileStorage, IImageProvider
+from core.dtos.db_entities import CharacterSheet
+from core.repositories.db_sql_repo.sql_repository import ISQLRepository
 
 # Upper bound for uploaded sheet images (5 MB).
 MAX_SHEET_SIZE_BYTES = 5 * 1024 * 1024
@@ -20,7 +19,7 @@ class CharacterSheetService:
 
     def __init__(
         self,
-        sheet_repository: ICharacterSheetRepository,
+        sheet_repository: ISQLRepository[CharacterSheet],
         storage: IFileStorage,
         image_provider: IImageProvider,
     ) -> None:
@@ -35,7 +34,7 @@ class CharacterSheetService:
         original_filename: str,
         content_type: str,
         data: bytes,
-    ) -> Any:
+    ) -> CharacterSheet:
         """Validate and persist an uploaded reference sheet for the agent."""
         if not agent_id:
             raise ValueError("agent_id is required.")
@@ -58,23 +57,23 @@ class CharacterSheetService:
             raise ValueError("File content does not look like a valid image.")
 
         stored_filename = self._storage.save_bytes(original_filename, data)
-
-        return await self._sheets.insert_async(
-            {
-                "agent_id": agent_id,
-                "original_filename": original_filename,
-                "stored_filename": stored_filename,
-                "content_type": content_type,
-            }
+        sheet = CharacterSheet(
+            agent_id=agent_id,
+            original_filename=original_filename,
+            stored_filename=stored_filename,
+            content_type=content_type,
         )
 
-    async def list_sheets_async(self, agent_id: str) -> List[Any]:
+        async with self._sheets:
+            return await self._sheets.insert_async(sheet)
+
+    async def list_sheets_async(self, agent_id: str) -> List[CharacterSheet]:
         """Return the agent's uploaded sheets, newest first."""
-        return await self._sheets.get_by_agent_async(agent_id)
+        return await self._sheets_of_agent_async(agent_id)
 
     async def open_sheet_async(self, sheet_id: str) -> Optional[bytes]:
         """Return the stored image bytes for a sheet, or None when absent."""
-        sheet = await self._sheets.get_async(sheet_id)
+        sheet = await self._get_sheet_async(sheet_id)
 
         if sheet is None:
             return None
@@ -83,17 +82,18 @@ class CharacterSheetService:
 
     async def delete_sheet_async(self, sheet_id: str) -> None:
         """Remove a sheet's stored file and its database record."""
-        sheet = await self._sheets.get_async(sheet_id)
+        sheet = await self._get_sheet_async(sheet_id)
 
         if sheet is None:
             raise LookupError("Sheet not found.")
 
         self._storage.delete(sheet.stored_filename)
-        await self._sheets.delete_async(sheet_id)
+        async with self._sheets:
+            await self._sheets.delete_async(sheet_id)
 
     async def generate_avatar_async(self, agent_id: str) -> str:
         """Generate a profile picture from the agent's latest sheet via the provider."""
-        sheets = await self._sheets.get_by_agent_async(agent_id)
+        sheets = await self._sheets_of_agent_async(agent_id)
 
         if not sheets:
             raise LookupError(
@@ -101,3 +101,19 @@ class CharacterSheetService:
             )
 
         return await self._provider.generate_async(agent_id, sheets[0])
+
+    async def _get_sheet_async(self, sheet_id: str) -> Optional[CharacterSheet]:
+        """Fetch one sheet record by id through the injected repository."""
+        async with self._sheets:
+            return await self._sheets.get_async(sheet_id)
+
+    async def _sheets_of_agent_async(self, agent_id: str) -> List[CharacterSheet]:
+        """Return every sheet for the agent, newest first."""
+        async with self._sheets:
+            sheets = await self._sheets.get_all_async()
+
+        return sorted(
+            (sheet for sheet in sheets if str(sheet.agent_id) == str(agent_id)),
+            key=lambda sheet: sheet.created_at or datetime.min,
+            reverse=True,
+        )

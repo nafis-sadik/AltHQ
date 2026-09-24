@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from business.memory.token_budget import estimate_node_tokens
+from core.dtos.db_entities import EventLogNode
+from core.repositories.db_sql_repo.sql_repository import ISQLRepository
 
 # Default cap for the active prompt window when no explicit budget is supplied.
 DEFAULT_TOKEN_BUDGET = 4096
@@ -51,7 +53,7 @@ class MemoryWindowService:
     once the configured node limit is exceeded.
     """
 
-    def __init__(self, event_repository: Any) -> None:
+    def __init__(self, event_repository: ISQLRepository[EventLogNode]) -> None:
         """Store the repository contract without importing any storage framework."""
         self._events = event_repository
 
@@ -61,7 +63,17 @@ class MemoryWindowService:
         node_limit: Optional[int] = None,
     ) -> MemoryWindow:
         """Return the newest ``node_limit`` active nodes, oldest sequence first."""
-        active = await self._events.get_active_by_agent_async(agent_id)
+        async with self._events:
+            nodes = await self._events.get_all_async()
+
+        active = sorted(
+            (
+                node
+                for node in nodes
+                if str(node.agent_id) == str(agent_id) and node.is_active
+            ),
+            key=lambda node: node.sequence_index,
+        )
 
         if node_limit is None or node_limit < 1:
             node_limit = len(active) or 0

@@ -271,10 +271,10 @@
       values.forEach(function (message) { $('<div>').text(message).appendTo(box); });
     }
 
-    function postAction(url, data) {
+    function apiRequest(url, method, data) {
       return $.ajax({
         url: url,
-        method: 'POST',
+        method: method || 'POST',
         headers: { 'X-CSRFToken': csrfToken },
         data: data || {}
       });
@@ -287,7 +287,7 @@
 
     $('#event-form').on('submit', function (event) {
       event.preventDefault();
-      postAction("{% url 'dashboard:event_node_create' %}", $(this).serialize())
+      apiRequest("{% url 'dashboard:event_node_collection' %}", 'POST', $(this).serialize())
         .done(function () { location.reload(); })
         .fail(showRequestError);
     });
@@ -307,7 +307,7 @@
     $('.node-edit-form').on('submit', function (event) {
       event.preventDefault();
       const nodeId = $(this).data('node-id');
-      postAction('/api/events/' + encodeURIComponent(nodeId) + '/edit/', $(this).serialize())
+      apiRequest('/api/events/' + encodeURIComponent(nodeId) + '/', 'PUT', $(this).serialize())
         .done(function () { location.reload(); })
         .fail(showRequestError);
     });
@@ -316,7 +316,7 @@
       const nodeId = $(this).data('node-id');
       const agentId = $(this).data('agent-id');
       if (!window.confirm('Delete this empty timeline node?')) { return; }
-      postAction('/api/events/' + encodeURIComponent(nodeId) + '/delete/', { agent_id: agentId })
+      apiRequest('/api/events/' + encodeURIComponent(nodeId) + '/', 'DELETE', { agent_id: agentId })
         .done(function () { location.reload(); })
         .fail(showRequestError);
     });
@@ -324,7 +324,7 @@
     $('.message-create-form').on('submit', function (event) {
       event.preventDefault();
       const nodeId = $(this).data('node-id');
-      postAction('/api/events/' + encodeURIComponent(nodeId) + '/messages/create/', $(this).serialize())
+      apiRequest('/api/events/' + encodeURIComponent(nodeId) + '/messages/', 'POST', $(this).serialize())
         .done(function () { location.reload(); })
         .fail(showRequestError);
     });
@@ -341,7 +341,7 @@
     $('.message-edit-form').on('submit', function (event) {
       event.preventDefault();
       const messageId = $(this).data('message-id');
-      postAction('/api/messages/' + encodeURIComponent(messageId) + '/edit/', $(this).serialize())
+      apiRequest('/api/messages/' + encodeURIComponent(messageId) + '/', 'PUT', $(this).serialize())
         .done(function () { location.reload(); })
         .fail(showRequestError);
     });
@@ -350,7 +350,7 @@
       const messageId = $(this).data('message-id');
       const direction = $(this).data('direction');
       const agentId = $(this).closest('.message-row').data('agent-id');
-      postAction('/api/messages/' + encodeURIComponent(messageId) + '/move/', { direction: direction, agent_id: agentId })
+      apiRequest('/api/messages/' + encodeURIComponent(messageId) + '/move/', 'PUT', { direction: direction, agent_id: agentId })
         .done(function () { location.reload(); })
         .fail(showRequestError);
     });
@@ -359,7 +359,7 @@
       const messageId = $(this).data('message-id');
       const agentId = $(this).closest('.message-row').data('agent-id');
       if (!window.confirm('Delete this message?')) { return; }
-      postAction('/api/messages/' + encodeURIComponent(messageId) + '/delete/', { agent_id: agentId })
+      apiRequest('/api/messages/' + encodeURIComponent(messageId) + '/', 'DELETE', { agent_id: agentId })
         .done(function () { location.reload(); })
         .fail(showRequestError);
     });

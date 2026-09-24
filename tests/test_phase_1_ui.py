@@ -3,10 +3,20 @@
 import json
 import re
 import uuid
+from urllib.parse import urlencode
 
 import pytest  # noqa: F401  (used implicitly via the client fixture)
 
 # Paths, settings, and artifact isolation are configured in conftest.py.
+
+
+def _put(client, url, data):
+    """Send a PUT with a jQuery-serialized (urlencoded) form body."""
+    return client.put(
+        url,
+        urlencode(data),
+        content_type="application/x-www-form-urlencoded",
+    )
 
 
 def test_index_without_persona_shows_empty_state(client):
@@ -20,9 +30,9 @@ def test_index_without_persona_shows_empty_state(client):
 
 
 def test_persona_create_flow(client):
-    """Creating a persona must redirect and the dashboard must render its state."""
+    """Creating a persona via POST /api/personas/ must return 201 and render on the dashboard."""
     response = client.post(
-        "/persona/create/",
+        "/api/personas/",
         {
             "name": "Aria",
             "gender": "female",
@@ -30,7 +40,8 @@ def test_persona_create_flow(client):
             "background_story": "Born in a home lab.",
         },
     )
-    assert response.status_code == 302
+    assert response.status_code == 201
+    assert response.json()["ok"] is True
 
     dashboard = client.get("/")
     html = dashboard.content.decode()
@@ -39,16 +50,16 @@ def test_persona_create_flow(client):
 
 
 def test_persona_create_rejects_invalid(client):
-    """Invalid persona input must re-render the form with errors and 422."""
-    response = client.post("/persona/create/", {"name": "", "bio": ""})
+    """Invalid persona input must return field errors with 422."""
+    response = client.post("/api/personas/", {"name": "", "bio": ""})
     assert response.status_code == 422
-    assert "name must not be blank." in response.content.decode()
+    assert "name must not be blank." in response.json()["errors"]
 
 
 def test_persona_update_ajax(client):
-    """The AJAX endpoint must persist updates and return JSON state."""
+    """The PUT endpoint must persist updates and return JSON state."""
     client.post(
-        "/persona/create/",
+        "/api/personas/",
         {"name": "Aria", "bio": "A warm companion."},
     )
 
@@ -56,10 +67,10 @@ def test_persona_update_ajax(client):
     html = dashboard.content.decode()
     agent_id = html.split('name="agent_id" value="')[1].split('"')[0]
 
-    response = client.post(
-        "/api/persona/update/",
+    response = _put(
+        client,
+        f"/api/personas/{agent_id}/",
         {
-            "agent_id": agent_id,
             "name": "Aria Prime",
             "active_node_limit": "42",
         },
@@ -73,15 +84,16 @@ def test_persona_update_ajax(client):
 
 
 def test_persona_update_ajax_rejects_invalid(client):
-    """The AJAX endpoint must return field errors with 422, never a 500."""
-    client.post("/persona/create/", {"name": "Aria", "bio": "Warm."})
+    """The PUT endpoint must return field errors with 422, never a 500."""
+    client.post("/api/personas/", {"name": "Aria", "bio": "Warm."})
     dashboard = client.get("/")
     html = dashboard.content.decode()
     agent_id = html.split('name="agent_id" value="')[1].split('"')[0]
 
-    response = client.post(
-        "/api/persona/update/",
-        {"agent_id": agent_id, "name": "", "active_node_limit": "7"},
+    response = _put(
+        client,
+        f"/api/personas/{agent_id}/",
+        {"name": "", "active_node_limit": "7"},
     )
     payload = response.json()
 
@@ -118,24 +130,25 @@ PNG_BYTES = bytes.fromhex(
 
 def _create_persona(client):
     """Create the persona under test and return its agent id from the dashboard HTML."""
-    client.post("/persona/create/", {"name": "Aria", "gender": "female", "bio": "Warm."})
+    client.post("/api/personas/", {"name": "Aria", "gender": "female", "bio": "Warm."})
     html = client.get("/").content.decode()
     return html.split('name="agent_id" value="')[1].split('"')[0]
 
 
 def test_gender_restricted_to_dropdown_options(client):
-    """The UI offers exactly the three canonical genders and rejects others."""
+    """The UI offers exactly the canonical genders and rejects others."""
     html = client.get("/persona/new/").content.decode()
-    for label in (">Male<", ">Female<", ">Unspecified<"):
+    for label in (">Male<", ">Female<", ">Non-binary<", ">Prefer not to say<"):
         assert label in html
 
     _create_persona(client)
     dashboard = client.get("/").content.decode()
     agent_id = dashboard.split('name="agent_id" value="')[1].split('"')[0]
 
-    invalid = client.post(
-        "/api/persona/update/",
-        {"agent_id": agent_id, "gender": "robot"},
+    invalid = _put(
+        client,
+        f"/api/personas/{agent_id}/",
+        {"gender": "robot"},
     )
     assert invalid.status_code == 422
     assert any("gender must be one of" in error for error in invalid.json()["errors"])
@@ -146,7 +159,7 @@ def test_sheet_upload_list_delete_flow(client):
     _create_persona(client)
 
     uploaded = client.post(
-        "/api/sheets/upload/",
+        "/api/sheets/",
         {"sheet": _FakeUpload("aria_ref.png", PNG_BYTES, "image/png")},
     )
     assert uploaded.status_code == 200, uploaded.content
@@ -160,7 +173,7 @@ def test_sheet_upload_list_delete_flow(client):
     assert image.status_code == 200
     assert image.content == PNG_BYTES
 
-    deleted = client.post(f"/api/sheets/{sheet_id}/delete/")
+    deleted = client.delete(f"/api/sheets/{sheet_id}/")
     assert deleted.status_code == 200
     assert client.get(f"/sheets/{sheet_id}/image/").status_code == 404
 
@@ -170,7 +183,7 @@ def test_sheet_upload_rejects_non_image(client):
     _create_persona(client)
 
     uploaded = client.post(
-        "/api/sheets/upload/",
+        "/api/sheets/",
         {"sheet": _FakeUpload("evil.png", b"<script>not-an-image</script>", "image/png")},
     )
     assert uploaded.status_code == 422
@@ -181,7 +194,7 @@ def test_generate_endpoint_returns_501_stub(client):
     """The generate button endpoint must answer 501 until a provider is plugged in."""
     _create_persona(client)
     uploaded = client.post(
-        "/api/sheets/upload/",
+        "/api/sheets/",
         {"sheet": _FakeUpload("aria_ref.png", PNG_BYTES, "image/png")},
     )
     sheet_id = uploaded.json()["sheet"]["id"]

@@ -85,6 +85,31 @@ Useful routes:
 - `/persona/new/` — persona creation form.
 - `/avatar/` — current avatar or placeholder image.
 
+Both domains are exposed with RESTful JSON API endpoints (routes are owned by
+`PersonaController` and `EventLogController` in `src/app/dashboard/controllers/`;
+all business logic is delegated to the injected `IPersonaService` /
+`IEventLogService` implementations):
+
+Persona domain:
+
+- `GET` / `POST /api/personas/` — paged persona list / create (create returns `201`).
+- `GET` / `PUT /api/personas/<agent_id>/` — persona detail / update (`422` on validation errors).
+- `POST /api/avatar/generate/` — request AI profile picture generation (`501` until a provider is plugged in).
+- `POST /api/sheets/` — upload a character reference sheet.
+- `DELETE /api/sheets/<sheet_id>/` — remove a reference sheet.
+
+Line of Truth domain:
+
+- `POST /api/events/` — create a timeline node.
+- `PUT` / `DELETE /api/events/<node_id>/` — edit a node summary / delete an empty node (`409` when it still has messages).
+- `POST /api/events/<node_id>/messages/` — append a message to a node.
+- `PUT` / `DELETE /api/messages/<message_id>/` — edit or delete a message.
+- `PUT /api/messages/<message_id>/move/` — move a message to another node (`node_id`) or reorder it (`direction=up|down`).
+
+`PUT`/`DELETE` requests are sent with jQuery-serialized, urlencoded form bodies;
+the Layer 1 controllers parse them for any HTTP verb (Django only populates
+`request.POST` for `POST`).
+
 ### Line of Truth workflow
 
 The event page is a plain chronological node list rather than a hidden history-rewrite mode:

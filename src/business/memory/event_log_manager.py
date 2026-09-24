@@ -1,5 +1,6 @@
 """Framework-independent manager for the chronological Line of Truth timeline."""
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional
@@ -9,10 +10,8 @@ from business.memory.memory_window_service import (
     MemoryWindow,
     MemoryWindowService,
 )
-from business.memory.repository_protocols import (
-    IEventLogRepository,
-    IMessageRepository,
-)
+from core.dtos.db_entities import Agent, EventLogNode, Message
+from core.repositories.db_sql_repo.sql_repository import ISQLRepository
 
 # Fallback active node limit used when the persona row does not expose one.
 DEFAULT_ACTIVE_NODE_LIMIT = 20
@@ -49,14 +48,124 @@ class TimelineEntry:
         }
 
 
-class EventLogManager:
-    """Coordinates explicit node and message operations through injected repositories."""
+class IEventLogService(ABC):
+    """Domain contract the Line of Truth manager exposes to Layer 1 controllers.
+
+    Declared here so the presentation layer depends on this abstraction while
+    ``EventLogManager`` remains the concrete implementation.
+    """
+
+    @abstractmethod
+    async def list_timeline_async(self, agent_id: Optional[str] = None) -> List["TimelineEntry"]:
+        """Return every node for the agent in chronological sequence order."""
+        ...
+
+    @abstractmethod
+    async def add_node_async(
+        self,
+        summary: str,
+        agent_id: Optional[str] = None,
+        is_active: bool = True,
+    ) -> Any:
+        """Append a node; ``is_active`` is an internal prompt-context flag only."""
+        ...
+
+    @abstractmethod
+    async def update_node_async(
+        self,
+        node_id: str,
+        summary: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> Any:
+        """Apply an explicit node summary edit for the selected agent."""
+        ...
+
+    @abstractmethod
+    async def delete_node_async(
+        self,
+        node_id: str,
+        agent_id: Optional[str] = None,
+    ) -> None:
+        """Delete an empty node belonging to the selected agent."""
+        ...
+
+    @abstractmethod
+    async def append_message_async(
+        self,
+        node_id: str,
+        sender: str,
+        content: str,
+        timestamp: Optional[datetime] = None,
+        agent_id: Optional[str] = None,
+    ) -> Any:
+        """Attach a user/agent message to a node with explicit order and time."""
+        ...
+
+    @abstractmethod
+    async def update_message_async(
+        self,
+        message_id: str,
+        sender: Optional[str] = None,
+        content: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
+        node_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> Any:
+        """Edit a message and optionally move it within the selected agent."""
+        ...
+
+    @abstractmethod
+    async def delete_message_async(
+        self,
+        message_id: str,
+        agent_id: Optional[str] = None,
+    ) -> Any:
+        """Delete a message so its owning node can eventually become empty."""
+        ...
+
+    @abstractmethod
+    async def move_message_async(
+        self,
+        message_id: str,
+        target_node_id: str,
+        agent_id: Optional[str] = None,
+    ) -> Any:
+        """Move a message to another node belonging to the selected agent."""
+        ...
+
+    @abstractmethod
+    async def move_message_position_async(
+        self,
+        message_id: str,
+        direction: str,
+        agent_id: Optional[str] = None,
+    ) -> Any:
+        """Move a message one position up or down within its current node."""
+        ...
+
+    @abstractmethod
+    async def get_memory_window_async(self, agent_id: str) -> "MemoryWindow":
+        """Return the non-prompt context window used by the agent's memory engine."""
+        ...
+
+    @abstractmethod
+    async def get_memory_window_budget_async(
+        self,
+        agent_id: str,
+        token_budget: Optional[int] = None,
+    ) -> "BudgetedMemoryWindow":
+        """Return the active context window plus its estimated token budget."""
+        ...
+
+
+class EventLogManager(IEventLogService):
+    """Coordinates explicit node and message operations through generic repositories."""
 
     def __init__(
         self,
-        event_repository: IEventLogRepository,
-        message_repository: IMessageRepository,
-        agent_repository: Optional[Any] = None,
+        event_repository: ISQLRepository[EventLogNode],
+        message_repository: ISQLRepository[Message],
+        agent_repository: Optional[ISQLRepository[Agent]] = None,
     ) -> None:
         """Store injected repositories and build the framework-free memory helper."""
         self._events = event_repository
@@ -78,11 +187,11 @@ class EventLogManager:
         """Return every node for the agent in chronological sequence order."""
         agent_id = agent_id or await self._resolve_default_agent_id()
 
-        nodes = await self._events.get_timeline_async(agent_id)
+        nodes = await self._nodes_of_agent_async(agent_id)
         entries: List[TimelineEntry] = []
 
         for node in nodes:
-            messages = await self._messages.get_by_node_async(node.id)
+            messages = await self._messages_of_node_async(node.id)
             entries.append(
                 TimelineEntry(
                     id=node.id,
@@ -110,21 +219,26 @@ class EventLogManager:
         agent_id = agent_id or await self._resolve_default_agent_id()
         await self._ensure_agent_exists_async(agent_id)
 
-        node = await self._events.insert_async(
-            {
-                "agent_id": agent_id,
-                "summary": summary.strip(),
-                "is_active": is_active,
-            }
+        timeline = await self._nodes_of_agent_async(agent_id)
+        next_sequence = (timeline[-1].sequence_index + 1) if timeline else 1
+        node = EventLogNode(
+            agent_id=agent_id,
+            sequence_index=next_sequence,
+            summary=summary.strip(),
+            is_active=bool(is_active),
         )
+
+        async with self._events:
+            saved = await self._events.insert_async(node)
         await self.invalidate_prompt_cache()
+
         return TimelineEntry(
-            id=node.id,
-            agent_id=node.agent_id,
-            sequence_index=node.sequence_index,
-            summary=node.summary,
-            timestamp=node.timestamp,
-            is_active=node.is_active,
+            id=saved.id,
+            agent_id=saved.agent_id,
+            sequence_index=saved.sequence_index,
+            summary=saved.summary,
+            timestamp=saved.timestamp,
+            is_active=saved.is_active,
         )
 
     async def append_node_async(
@@ -143,20 +257,21 @@ class EventLogManager:
         agent_id: Optional[str] = None,
     ) -> Any:
         """Apply an explicit node summary edit for the selected agent."""
-        node = await self._events.get_async(node_id)
-        if node is None:
-            raise LookupError("Event node not found.")
-        await self._assert_node_agent_async(node, agent_id)
+        async with self._events:
+            node = await self._events.get_async(node_id)
+            if node is None:
+                raise LookupError("Event node not found.")
+            await self._assert_node_agent_async(node, agent_id)
 
-        values: dict = {}
-        if summary is not None:
-            if not str(summary).strip():
-                raise ValueError("summary must not be blank.")
-            values["summary"] = str(summary).strip()
-        if not values:
-            raise ValueError("no node edit values provided.")
+            values: dict = {}
+            if summary is not None:
+                if not str(summary).strip():
+                    raise ValueError("summary must not be blank.")
+                values["summary"] = str(summary).strip()
+            if not values:
+                raise ValueError("no node edit values provided.")
 
-        updated = await self._events.update_async(node_id, values)
+            updated = await self._events.update_async(node_id, values)
         await self.invalidate_prompt_cache()
         return updated
 
@@ -166,28 +281,20 @@ class EventLogManager:
         agent_id: Optional[str] = None,
     ) -> None:
         """Delete an empty node belonging to the selected agent."""
-        node = await self._events.get_async(node_id)
-        if node is None:
-            raise LookupError("Event node not found.")
-        await self._assert_node_agent_async(node, agent_id)
+        async with self._events:
+            node = await self._events.get_async(node_id)
+            if node is None:
+                raise LookupError("Event node not found.")
+            await self._assert_node_agent_async(node, agent_id)
 
-        delete_if_empty = getattr(self._events, "delete_if_empty_async", None)
-        if delete_if_empty is not None:
-            deleted = await delete_if_empty(node_id)
-            if not deleted:
-                raise ValueError(
-                    "A node with messages cannot be deleted. "
-                    "Move or delete its messages first."
-                )
-        else:
-            messages = await self._messages.get_by_node_async(node_id)
-            if messages:
-                raise ValueError(
-                    "A node with messages cannot be deleted. "
-                    "Move or delete its messages first."
-                )
+        if await self._messages_of_node_async(node_id):
+            raise ValueError(
+                "A node with messages cannot be deleted. "
+                "Move or delete its messages first."
+            )
+
+        async with self._events:
             await self._events.delete_async(node_id)
-
         await self.invalidate_prompt_cache()
 
     async def append_message_async(
@@ -199,27 +306,30 @@ class EventLogManager:
         agent_id: Optional[str] = None,
     ) -> Any:
         """Attach a user/agent message to a node with explicit order and time."""
-        node = await self._events.get_async(node_id)
-        if node is None:
-            raise LookupError("Event node not found.")
-        effective_agent_id = agent_id or node.agent_id
-        await self._assert_node_agent_async(node, effective_agent_id)
+        async with self._events:
+            node = await self._events.get_async(node_id)
+            if node is None:
+                raise LookupError("Event node not found.")
+            effective_agent_id = agent_id or node.agent_id
+            await self._assert_node_agent_async(node, effective_agent_id)
 
         values = {
             "node_id": node_id,
             "sender": self._normalize_sender(sender, effective_agent_id),
             "content": self._normalize_content(content),
             "position": self._next_message_position(
-                await self._messages.get_by_node_async(node_id)
+                await self._messages_of_node_async(node_id)
             ),
         }
         normalized_timestamp = self._normalize_timestamp(timestamp)
         if normalized_timestamp is not None:
             values["timestamp"] = normalized_timestamp
 
-        message = await self._messages.insert_async(values)
+        message = Message(**values)
+        async with self._messages:
+            saved = await self._messages.insert_async(message)
         await self.invalidate_prompt_cache()
-        return message
+        return saved
 
     async def add_message_async(
         self,
@@ -248,7 +358,7 @@ class EventLogManager:
         agent_id: Optional[str] = None,
     ) -> Any:
         """Edit a message and optionally move it within the selected agent."""
-        message = await self._messages.get_async(message_id)
+        message = await self._get_message_async(message_id)
         if message is None:
             raise LookupError("Message not found.")
         source_node = await self._get_message_node_async(message)
@@ -267,13 +377,13 @@ class EventLogManager:
             if not target_node_id:
                 raise ValueError("node_id must not be blank.")
             if target_node_id != message.node_id:
-                target_node = await self._events.get_async(target_node_id)
+                target_node = await self._get_node_async(target_node_id)
                 if target_node is None:
                     raise LookupError("Target event node not found.")
                 await self._assert_node_agent_async(target_node, effective_agent_id)
                 values["node_id"] = target_node_id
                 values["position"] = self._next_message_position(
-                    await self._messages.get_by_node_async(target_node_id)
+                    await self._messages_of_node_async(target_node_id)
                 )
 
         if not values:
@@ -281,7 +391,8 @@ class EventLogManager:
                 return message
             raise ValueError("no message edit values provided.")
 
-        updated = await self._messages.update_async(message_id, values)
+        async with self._messages:
+            updated = await self._messages.update_async(message_id, values)
         await self.invalidate_prompt_cache()
         return updated
 
@@ -309,13 +420,13 @@ class EventLogManager:
         if normalized_direction not in {"up", "down"}:
             raise ValueError("direction must be 'up' or 'down'.")
 
-        message = await self._messages.get_async(message_id)
+        message = await self._get_message_async(message_id)
         if message is None:
             raise LookupError("Message not found.")
         node = await self._get_message_node_async(message)
         await self._assert_node_agent_async(node, agent_id or node.agent_id)
 
-        ordered = await self._messages.get_by_node_async(message.node_id)
+        ordered = await self._messages_of_node_async(message.node_id)
         current_index = next(
             (index for index, item in enumerate(ordered) if item.id == message_id),
             None,
@@ -328,12 +439,13 @@ class EventLogManager:
             return message
 
         ordered.insert(target_index, ordered.pop(current_index))
-        for position, item in enumerate(ordered):
-            if getattr(item, "position", None) != position:
-                await self._messages.update_async(item.id, {"position": position})
+        async with self._messages:
+            for position, item in enumerate(ordered):
+                if getattr(item, "position", None) != position:
+                    await self._messages.update_async(item.id, {"position": position})
 
         await self.invalidate_prompt_cache()
-        return await self._messages.get_async(message_id)
+        return await self._get_message_async(message_id)
 
     async def delete_message_async(
         self,
@@ -341,19 +453,20 @@ class EventLogManager:
         agent_id: Optional[str] = None,
     ) -> Any:
         """Delete a message so its owning node can eventually become empty."""
-        message = await self._messages.get_async(message_id)
+        message = await self._get_message_async(message_id)
         if message is None:
             raise LookupError("Message not found.")
         node = await self._get_message_node_async(message)
         await self._assert_node_agent_async(node, agent_id or node.agent_id)
 
-        await self._messages.delete_async(message_id)
+        async with self._messages:
+            await self._messages.delete_async(message_id)
         await self.invalidate_prompt_cache()
         return message
 
     async def get_memory_window_async(self, agent_id: str) -> MemoryWindow:
         """Return the non-prompt context window used by the agent's memory engine."""
-        persona = await self._agents.get_async(agent_id) if self._agents is not None else None
+        persona = await self._get_persona_async(agent_id)
         return await self._memory_window.get_active_window_async(
             agent_id,
             node_limit=self._memory_window_limit(persona) if persona is not None else None,
@@ -365,19 +478,63 @@ class EventLogManager:
         token_budget: Optional[int] = None,
     ) -> BudgetedMemoryWindow:
         """Return the active context window plus its estimated token budget."""
-        persona = await self._agents.get_async(agent_id) if self._agents is not None else None
+        persona = await self._get_persona_async(agent_id)
         return await self._memory_window.budget_active_window_async(
             agent_id,
             node_limit=self._memory_window_limit(persona) if persona is not None else None,
             token_budget=token_budget,
         )
 
+    async def _nodes_of_agent_async(self, agent_id: str) -> List[EventLogNode]:
+        """Return every node for the agent, oldest sequence first."""
+        async with self._events:
+            nodes = await self._events.get_all_async()
+        return sorted(
+            (node for node in nodes if str(node.agent_id) == str(agent_id)),
+            key=lambda node: node.sequence_index,
+        )
+
+    async def _messages_of_node_async(self, node_id: str) -> List[Message]:
+        """Return every message on the node in explicit conversation order."""
+        async with self._messages:
+            messages = await self._messages.get_all_async()
+        return sorted(
+            (
+                message
+                for message in messages
+                if str(message.node_id) == str(node_id)
+            ),
+            key=lambda message: (
+                int(message.position) if message.position is not None else 0,
+                message.timestamp or datetime.min,
+                message.id or "",
+            ),
+        )
+
+    async def _get_node_async(self, node_id: str) -> Optional[EventLogNode]:
+        """Fetch one event node by id."""
+        async with self._events:
+            return await self._events.get_async(node_id)
+
+    async def _get_message_async(self, message_id: str) -> Optional[Message]:
+        """Fetch one message by id."""
+        async with self._messages:
+            return await self._messages.get_async(message_id)
+
+    async def _get_persona_async(self, agent_id: str) -> Optional[Agent]:
+        """Fetch the selected agent row, or None when no persona exists yet."""
+        if self._agents is None:
+            return None
+        async with self._agents:
+            return await self._agents.get_async(agent_id)
+
     async def _ensure_agent_exists_async(self, agent_id: str) -> None:
         """Ensure an explicitly selected agent exists before writing its timeline."""
         if self._agents is None:
             return
-        if await self._agents.get_async(agent_id) is None:
-            raise LookupError("Agent not found.")
+        async with self._agents:
+            if await self._agents.get_async(agent_id) is None:
+                raise LookupError("Agent not found.")
 
     async def _assert_node_agent_async(self, node: Any, agent_id: Optional[str]) -> None:
         """Reject cross-agent timeline mutations."""
@@ -386,7 +543,7 @@ class EventLogManager:
 
     async def _get_message_node_async(self, message: Any) -> Any:
         """Resolve and validate the node that currently owns a message."""
-        node = await self._events.get_async(message.node_id)
+        node = await self._get_node_async(message.node_id)
         if node is None:
             raise LookupError("Event node not found for message.")
         return node
@@ -449,9 +606,11 @@ class EventLogManager:
         """Return the first persona's id, or raise when no persona exists yet."""
         if self._agents is None:
             raise LookupError("no persona has been created yet.")
-
-        persona = await self._agents.get_default_agent_async()
-        if persona is None:
+        async with self._agents:
+            personas = await self._agents.get_all_async()
+        if not personas:
             raise LookupError("no persona has been created yet.")
-
-        return persona.id
+        return sorted(
+            personas,
+            key=lambda persona: (str(persona.name).casefold(), str(persona.id)),
+        )[0].id

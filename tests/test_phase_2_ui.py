@@ -1,14 +1,24 @@
 """Layer 1 UI and API tests for the explicit multi-agent Line of Truth workflow."""
 
 import re
+from urllib.parse import urlencode
 
 # Paths, settings, and artifact isolation are configured in conftest.py.
+
+
+def _put(client, url, data):
+    """Send a PUT with a jQuery-serialized (urlencoded) form body."""
+    return client.put(
+        url,
+        urlencode(data),
+        content_type="application/x-www-form-urlencoded",
+    )
 
 
 def _create_persona(client):
     """Create the default persona used by the event log flows."""
     return client.post(
-        "/persona/create/",
+        "/api/personas/",
         {"name": "Aria", "gender": "female", "bio": "A warm companion."},
     )
 
@@ -21,7 +31,7 @@ def _agent_id(client):
 
 def _create_node(client, summary):
     """Create one timeline node and return its API payload."""
-    response = client.post("/api/events/create/", {"summary": summary})
+    response = client.post("/api/events/", {"summary": summary})
     assert response.status_code == 200
     return response.json()["node"]
 
@@ -67,7 +77,7 @@ def test_event_node_create_rejects_blank_summary(client):
     """Blank node summaries must be rejected without a server error."""
     _create_persona(client)
 
-    response = client.post("/api/events/create/", {"summary": "   "})
+    response = client.post("/api/events/", {"summary": "   "})
     assert response.status_code == 422
     assert "summary must not be blank." in response.json()["errors"]
 
@@ -83,8 +93,9 @@ def test_explicit_node_edit_is_visible_and_not_silent(client):
     _create_persona(client)
     node = _create_node(client, "Original memory.")
 
-    edited = client.post(
-        f"/api/events/{node['id']}/edit/",
+    edited = _put(
+        client,
+        f"/api/events/{node['id']}/",
         {"summary": "The corrected memory."},
     )
     assert edited.status_code == 200
@@ -103,22 +114,23 @@ def test_node_delete_requires_zero_messages(client):
     source = _create_node(client, "Source node.")
     target = _create_node(client, "Target node.")
     message = client.post(
-        f"/api/events/{source['id']}/messages/create/",
+        f"/api/events/{source['id']}/messages/",
         {"sender": "user", "content": "Move me."},
     ).json()["message"]
 
-    blocked = client.post(f"/api/events/{source['id']}/delete/")
+    blocked = client.delete(f"/api/events/{source['id']}/")
     assert blocked.status_code == 409
     assert "messages" in blocked.json()["errors"][0].lower()
 
-    moved = client.post(
+    moved = _put(
+        client,
         f"/api/messages/{message['id']}/move/",
         {"node_id": target["id"]},
     )
     assert moved.status_code == 200
     assert moved.json()["message"]["node_id"] == target["id"]
 
-    deleted = client.post(f"/api/events/{source['id']}/delete/")
+    deleted = client.delete(f"/api/events/{source['id']}/")
     assert deleted.status_code == 200
     html = client.get("/events/").content.decode()
     assert "Source node." not in html
@@ -132,7 +144,7 @@ def test_message_create_and_edit_support_speaker_and_manual_time(client):
     node = _create_node(client, "A conversation happened.")
 
     created = client.post(
-        f"/api/events/{node['id']}/messages/create/",
+        f"/api/events/{node['id']}/messages/",
         {
             "agent_id": agent_id,
             "sender": "user",
@@ -147,8 +159,9 @@ def test_message_create_and_edit_support_speaker_and_manual_time(client):
     assert message["position"] == 0
     assert message["timestamp"].startswith("2024-05-04T10:30")
 
-    edited = client.post(
-        f"/api/messages/{message['id']}/edit/",
+    edited = _put(
+        client,
+        f"/api/messages/{message['id']}/",
         {
             "agent_id": agent_id,
             "sender": agent_id,
@@ -175,19 +188,20 @@ def test_messages_can_reorder_and_be_deleted(client):
     agent_id = _agent_id(client)
     node = _create_node(client, "A conversation happened.")
     first = client.post(
-        f"/api/events/{node['id']}/messages/create/",
+        f"/api/events/{node['id']}/messages/",
         {"agent_id": agent_id, "sender": "user", "content": "One"},
     ).json()["message"]
     second = client.post(
-        f"/api/events/{node['id']}/messages/create/",
+        f"/api/events/{node['id']}/messages/",
         {"agent_id": agent_id, "sender": agent_id, "content": "Two"},
     ).json()["message"]
     third = client.post(
-        f"/api/events/{node['id']}/messages/create/",
+        f"/api/events/{node['id']}/messages/",
         {"agent_id": agent_id, "sender": "user", "content": "Three"},
     ).json()["message"]
 
-    moved = client.post(
+    moved = _put(
+        client,
         f"/api/messages/{third['id']}/move/",
         {"direction": "up"},
     )
@@ -195,13 +209,14 @@ def test_messages_can_reorder_and_be_deleted(client):
     html = client.get("/events/").content.decode()
     assert html.index("Three") < html.index("Two")
 
-    invalid = client.post(
+    invalid = _put(
+        client,
         f"/api/messages/{second['id']}/move/",
         {"direction": "sideways"},
     )
     assert invalid.status_code == 422
 
-    deleted = client.post(f"/api/messages/{second['id']}/delete/")
+    deleted = client.delete(f"/api/messages/{second['id']}/")
     assert deleted.status_code == 200
     html = client.get("/events/").content.decode()
     assert "Two" not in html
@@ -212,10 +227,10 @@ def test_agents_have_isolated_timelines_and_switcher(client):
     _create_persona(client)
     first_agent_id = _agent_id(client)
     second = client.post(
-        "/persona/create/",
-        {"name": "Beacon", "gender": "unspecified", "bio": "Second agent."},
+        "/api/personas/",
+        {"name": "Beacon", "gender": "non_binary", "bio": "Second agent."},
     )
-    assert second.status_code == 302
+    assert second.status_code == 201
 
     dashboard = client.get("/").content.decode()
     agent_ids = re.findall(r'<option value="([a-f0-9]+)"', dashboard)
@@ -224,20 +239,20 @@ def test_agents_have_isolated_timelines_and_switcher(client):
 
     first_node = _create_node(client, "Aria node.")
     second_node_response = client.post(
-        "/api/events/create/",
+        "/api/events/",
         {"agent_id": second_agent_id, "summary": "Beacon node."},
     )
     assert second_node_response.status_code == 200
     second_node = second_node_response.json()["node"]
 
     invalid_sender = client.post(
-        f"/api/events/{second_node['id']}/messages/create/",
+        f"/api/events/{second_node['id']}/messages/",
         {"agent_id": second_agent_id, "sender": "someone-else", "content": "No."},
     )
     assert invalid_sender.status_code == 422
 
     message = client.post(
-        f"/api/events/{second_node['id']}/messages/create/",
+        f"/api/events/{second_node['id']}/messages/",
         {
             "agent_id": second_agent_id,
             "sender": second_agent_id,

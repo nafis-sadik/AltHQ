@@ -1,1 +1,1 @@
-"""Dashboard Django app: thin controllers over the Layer 2 persona service."""
+"""Dashboard Django app: thin adapters dispatching to per-domain controllers (Layer 1)."""
