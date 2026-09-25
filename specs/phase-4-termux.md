@@ -1,4 +1,4 @@
-# Phase 4 Specification: Android/Termux Runtime & Device Bridge
+# Phase 6 Specification: Android/Termux Runtime & Device Bridge
 
 ## 1. Objective & Scope
 - **Core Goal:** Package the application for seamless local execution on desktop environments (`venv` on Windows/Linux) and natively on mobile hardware via **Termux on Android**, implementing background daemonization and device integration hooks.

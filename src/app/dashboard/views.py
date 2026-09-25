@@ -28,9 +28,21 @@ def persona_new(request):
 
 
 @require_GET
+def agents(request):
+    """Serve the SSR agent browser and active-agent selection page."""
+    return container.persona_controller().get_agents(request)
+
+
+@require_POST
 def agent_switch(request):
-    """Redirect to a dashboard view with the requested agent selected."""
-    return container.persona_controller().get_agent_switch(request)
+    """Persist the requested agent as active and return to the chosen page."""
+    return container.persona_controller().post_agent_switch(request)
+
+
+@require_POST
+def agent_set_active(request, agent_id: str):
+    """Set the requested agent as the only persisted active agent."""
+    return container.persona_controller().post_set_active(request, agent_id)
 
 
 @require_http_methods(["GET", "POST"])

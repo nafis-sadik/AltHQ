@@ -1,7 +1,7 @@
 """Framework-independent character sheet management for persona reference images."""
 
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from business.persona.repository_protocols import IFileStorage, IImageProvider
 from core.dtos.db_entities import CharacterSheet

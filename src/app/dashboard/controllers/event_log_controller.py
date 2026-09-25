@@ -9,7 +9,7 @@ Contains zero business rules.
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.shortcuts import render
 
 from business.memory import IEventLogService, MESSAGE_SENDER_USER
@@ -82,6 +82,7 @@ class EventLogController:
                 "persona": persona,
                 "selected_agent": persona,
                 "agents": personas,
+                "active_agent": run_async(self._personas.get_active_async()),
                 "sender_options": self._sender_options(persona),
                 "timeline": timeline,
             },

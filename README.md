@@ -83,6 +83,7 @@ Useful routes:
 - `/` — persona dashboard; create a persona at `/persona/new/` when the database is empty.
 - `/events/` — selected agent's Line of Truth node list and conversation editor; use the agent switcher or `?agent_id=<id>` to select another agent.
 - `/persona/new/` — persona creation form.
+- `/agents/` — browse every agent and set the persisted active agent.
 - `/avatar/` — current avatar or placeholder image.
 
 Both domains are exposed with RESTful JSON API endpoints (routes are owned by
@@ -94,6 +95,7 @@ Persona domain:
 
 - `GET` / `POST /api/personas/` — paged persona list / create (create returns `201`).
 - `GET` / `PUT /api/personas/<agent_id>/` — persona detail / update (`422` on validation errors).
+- `POST /api/agents/<agent_id>/set_active/` — atomically set the active agent.
 - `POST /api/avatar/generate/` — request AI profile picture generation (`501` until a provider is plugged in).
 - `POST /api/sheets/` — upload a character reference sheet.
 - `DELETE /api/sheets/<sheet_id>/` — remove a reference sheet.
@@ -119,7 +121,7 @@ The event page is a plain chronological node list rather than a hidden history-r
 - Add a message under any node with its speaker selected from the fixed **User / current AI agent** dropdown, text, and optional conversation time (stored/displayed in UTC). Leaving the time blank uses the current time.
 - Edit a message to change its speaker, text, conversation time, or owning node.
 - Use the up/down controls to change a message's explicit sequence position. Conversation time remains independently editable so a moved message can be assigned the correct time.
-- Switch agents from the dashboard selector; use **New agent** to create another Agent persona. Each agent has an independent timeline and the AI option in **Said by** always refers to the currently selected agent.
+- Switch the active agent from the dashboard selector; use **New agent** to create another Agent persona. The switcher persists the active agent, and `/agents/` provides the same control. Each agent has an independent timeline and the AI option in **Said by** always refers to the currently selected agent.
 
 The application creates its persistence schema on first use. Django migrations are not required for this project because `DATABASES` is empty and the Layer 3 repositories create the SQLite tables directly.
 
@@ -131,7 +133,7 @@ By default, the composition root uses `src` as its data directory:
 - `src/agent.db` — SQLite database (ignored by Git; WAL sidecar files may appear beside it).
 - `src/sheets/` — uploaded character reference images.
 
-On startup, the event repository upgrades older databases with the `event_log_nodes.agent_id` foreign key, and the message repository adds the message `node_id` foreign key and explicit `position` column while backfilling legacy rows by timestamp. Set `AGENT_CONFIG_DIR` to another directory when you want isolated local data. Django settings read `src/.env`; `DJANGO_DEBUG=0` and `DJANGO_SECRET_KEY` can be supplied there for a non-development deployment. Do not commit real secrets.
+On startup, the SQLAlchemy repository bootstraps the current `agents` schema with its database-enforced single-active-agent invariant; the feature-focused `AgentRepository` does not manage schema lifecycle or upgrade legacy agent tables. The event repository upgrades older databases with the `event_log_nodes.agent_id` foreign key, and the message repository adds the message `node_id` foreign key and explicit `position` column while backfilling legacy rows by timestamp. Set `AGENT_CONFIG_DIR` to another directory when you want isolated local data. Django settings read `src/.env`; `DJANGO_DEBUG=0` and `DJANGO_SECRET_KEY` can be supplied there for a non-development deployment. Do not commit real secrets.
 
 ## Run and debug in Visual Studio Code
 

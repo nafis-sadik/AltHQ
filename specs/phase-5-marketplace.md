@@ -1,4 +1,4 @@
-# Phase 5 Specification: Plugin System & Marketplace Foundation
+# Phase 7 Specification: Plugin System & Marketplace Foundation
 
 ## 1. Objective & Scope
 - **Core Goal:** Build the dynamic skill plugin loader for runtime extensibility and establish the unified OAuth identity mapping framework bridging the local agent dashboard to the future centralized skill marketplace portal.

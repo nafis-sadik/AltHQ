@@ -10,9 +10,15 @@ urlpatterns = [
     # Persona domain (PersonaController)
     path("", views.index, name="index"),
     path("persona/new/", views.persona_new, name="persona_new"),
+    path("agents/", views.agents, name="agents"),
     path("agents/switch/", views.agent_switch, name="agent_switch"),
     path("api/personas/", views.persona_collection, name="persona_api"),
     path("api/personas/<str:agent_id>/", views.persona_detail, name="persona_detail"),
+    path(
+        "api/agents/<str:agent_id>/set_active/",
+        views.agent_set_active,
+        name="agent_set_active",
+    ),
     path("api/avatar/generate/", views.avatar_generate, name="avatar_generate"),
     path("avatar/", views.avatar, name="avatar"),
     path("api/sheets/", views.sheet_upload, name="sheet_upload"),

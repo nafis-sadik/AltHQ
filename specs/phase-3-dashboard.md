@@ -1,4 +1,4 @@
-# Phase 3 Specification: Dashboard, Auth & Model Provider Integration
+# Phase 5 Specification: Dashboard, Auth & Model Provider Integration
 
 ## 1. Objective & Scope
 - **Core Goal:** Wrap the core engine (Layers 2 & 3) in a web framework (Flask/FastAPI), build the server-side rendered Bootstrap 5 + jQuery dashboard, integrate Auth0/OAuth authentication, implement the explicit Line of Truth history editor UI, and establish LLM provider connectivity (Ollama & OpenRouter).
@@ -40,11 +40,11 @@
   - [ ] Implement `OpenRouterProvider` for cloud routing with token authorization headers.
 
 - [ ] **Task 5: Unit & Integration Testing**
-  - [ ] Write integration tests (`tests/test_phase_3.py`) verifying dashboard route access control, persona updates via UI forms, and mock LLM provider execution.
+  - [ ] Write integration tests (`tests/test_phase_5.py`) verifying dashboard route access control, persona updates via UI forms, and mock LLM provider execution.
 
 ---
 
 ## 4. Exit Gate / Acceptance Test
-To declare **Phase 3 Complete**, run the validation test suite:
+To declare **Phase 5 Complete**, run the validation test suite:
 ```bash
-python -m pytest tests/test_phase_3.py
+python -m pytest tests/test_phase_5.py

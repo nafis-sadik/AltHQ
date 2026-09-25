@@ -4,7 +4,7 @@ from enum import StrEnum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, false, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -25,6 +25,14 @@ class Agent(Base):
     """Database entity describing the agent's identity, persona metadata, and prompt limits."""
 
     __tablename__ = "agents"
+    __table_args__ = (
+        Index(
+            "uq_agents_single_active",
+            "is_active",
+            unique=True,
+            sqlite_where=text("is_active = 1"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         String(32),
@@ -37,6 +45,12 @@ class Agent(Base):
     bio: Mapped[str] = mapped_column(Text, nullable=False)
     background_story: Mapped[str] = mapped_column(Text, nullable=False)
     active_node_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,
@@ -66,9 +80,12 @@ class Agent(Base):
             "bio": self.bio,
             "background_story": self.background_story,
             "active_node_limit": self.active_node_limit,
+            "is_active": self.is_active,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+
 class CharacterSheet(Base):
     """Database entity recording an uploaded character reference sheet image."""
 

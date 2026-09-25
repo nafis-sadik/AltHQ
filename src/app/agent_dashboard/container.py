@@ -16,8 +16,13 @@ from business.persona import (
 )
 from core.db_engine import create_sqlite_engine
 from core.dtos.db_entities import Agent, CharacterSheet, EventLogNode, Message
-from core.repositories import FileStorageRepository, JsonConfigRepository
+from core.repositories import (
+    AgentRepository,
+    FileStorageRepository,
+    JsonConfigRepository,
+)
 from core.repositories.db_sql_repo.sql_alchemy_repository import SQLAlchemyRepository
+from dashboard.async_utils import run_async
 from dashboard.controllers import EventLogController, PersonaController
 
 
@@ -58,19 +63,14 @@ class Container:
         # One shared WAL-enabled engine; every repository reuses it.
         self._engine = create_sqlite_engine(f"sqlite+aiosqlite:///{db_path}")
 
-        self._repository = SQLAlchemyRepository[Agent](Agent, self._engine)
+        agent_store = SQLAlchemyRepository[Agent](Agent, self._engine)
+        self._repository = AgentRepository(agent_store)
         self._event_repository = SQLAlchemyRepository[EventLogNode](EventLogNode, self._engine)
         self._message_repository = SQLAlchemyRepository[Message](Message, self._engine)
 
         # Bootstrap the schema so a fresh deployment can serve requests immediately.
         # All entities share one metadata, so a single create creates every table.
-        import asyncio
-
-        bootstrap_loop = asyncio.new_event_loop()
-        try:
-            bootstrap_loop.run_until_complete(self._repository.create_schema())
-        finally:
-            bootstrap_loop.close()
+        run_async(agent_store.create_schema())
 
         self._service = PersonaService(
             persona_repository=self._repository,
@@ -145,8 +145,6 @@ class Container:
         """Dispose engines and drop cached singletons (used between tests)."""
         # Dispose on the shared loop where the pool was created, otherwise
         # pooled aiosqlite connections stay open and lock the database file.
-        from dashboard.async_utils import run_async
-
         if self._engine is not None:
             run_async(self._engine.dispose())
 

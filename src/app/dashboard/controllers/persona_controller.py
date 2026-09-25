@@ -41,8 +41,7 @@ GENDER_LABELS = {
 
 def list_personas(service: IPersonaService) -> List[Any]:
     """Return all personas (name-ordered) for the agent switcher."""
-    page = run_async(service.GetPagedPersona(1, page_size=1000))
-    return list(page.source_data or [])
+    return list(run_async(service.list_agents_async()))
 
 
 def select_persona(
@@ -50,14 +49,14 @@ def select_persona(
     request: HttpRequest,
     personas: List[Any],
 ) -> Optional[Any]:
-    """Choose the requested agent, falling back to the first available agent."""
+    """Choose the requested agent, falling back to the persisted active agent."""
     params = request_params(request)
     requested_id = request.GET.get("agent_id") or params.get("agent_id")
     if requested_id:
         for persona in personas:
             if str(persona.id) == str(requested_id):
                 return persona
-    return personas[0] if personas else None
+    return run_async(service.get_active_async())
 
 
 def request_agent_id(request: HttpRequest) -> Optional[str]:
@@ -77,7 +76,7 @@ def select_requested_persona(
             (persona for persona in personas if str(persona.id) == str(requested_id)),
             None,
         )
-    return personas[0] if personas else None
+    return run_async(service.get_active_async())
 
 
 def effective_agent_id(
@@ -112,6 +111,7 @@ def persona_json(persona: Any) -> dict:
         "bio": persona.bio,
         "background_story": persona.background_story,
         "active_node_limit": persona.active_node_limit,
+        "is_active": bool(getattr(persona, "is_active", False)),
     }
 
 
@@ -150,6 +150,17 @@ class PersonaController:
         """Render the selected persona dashboard, sheets, and runtime info."""
         return render(request, "dashboard/index.html", self._persona_context(request))
 
+    def get_agents(self, request: HttpRequest):
+        """Render every persona with its persisted active-agent status."""
+        return render(
+            request,
+            "dashboard/agents.html",
+            {
+                "agents": list_personas(self._personas),
+                "active_agent": run_async(self._personas.get_active_async()),
+            },
+        )
+
     def get_new_persona(self, request: HttpRequest):
         """Render the persona creation form for a new or first agent."""
         personas = list_personas(self._personas)
@@ -171,10 +182,11 @@ class PersonaController:
             target = f"{target}?{urlencode({'agent_id': request.GET['agent_id']})}"
         return redirect(target)
 
-    def get_agent_switch(self, request: HttpRequest):
-        """Redirect to a dashboard view with the requested agent selected."""
+    def post_agent_switch(self, request: HttpRequest):
+        """Persist the requested agent as active and return to the chosen page."""
         personas = list_personas(self._personas)
-        requested_id = request.GET.get("agent_id")
+        params = request_params(request)
+        requested_id = params.get("agent_id")
         selected = next(
             (persona for persona in personas if str(persona.id) == str(requested_id)),
             None,
@@ -182,12 +194,31 @@ class PersonaController:
         if selected is None:
             return redirect("dashboard:index")
 
+        try:
+            run_async(self._personas.set_active_async(selected.id))
+        except LookupError:
+            return redirect("dashboard:index")
+
         destination = (
             reverse("dashboard:event_log")
-            if request.GET.get("destination") == "events"
+            if params.get("destination") == "events"
             else reverse("dashboard:index")
         )
         return redirect(f"{destination}?{urlencode({'agent_id': selected.id})}")
+
+    def post_set_active(self, request: HttpRequest, agent_id: str):
+        """Persist the requested agent as the only active agent."""
+        try:
+            active_agent = run_async(self._personas.set_active_async(agent_id))
+        except LookupError as missing:
+            return JsonResponse({"ok": False, "errors": [str(missing)]}, status=404)
+
+        return JsonResponse(
+            {
+                "ok": True,
+                "active_agent_id": active_agent.id,
+            }
+        )
 
     # -- Persona REST API (HttpGet/HttpPost/HttpPut) -------------------------
 
@@ -400,6 +431,7 @@ class PersonaController:
             "persona": persona,
             "agents": personas,
             "selected_agent": persona,
+            "active_agent": run_async(self._personas.get_active_async()),
             "sheets": sheets,
             "gender_options": _gender_options(),
             "slider_min": 1,
@@ -410,9 +442,15 @@ class PersonaController:
     def _parse_persona_update(self, request: HttpRequest) -> PersonaUpdate:
         """Convert optional form fields into a PersonaUpdate (None when absent)."""
         params = request_params(request)
+        gender = params.get("gender")
+        if gender:
+            try:
+                gender = Gender(gender)
+            except ValueError:
+                pass
         return PersonaUpdate(
             name=params.get("name"),
-            gender=params.get("gender"),
+            gender=gender,
             profile_picture=params.get("profile_picture"),
             bio=params.get("bio"),
             background_story=params.get("background_story"),

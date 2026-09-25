@@ -1,11 +1,8 @@
 """Layer 1 UI tests: the Django dashboard vertical slice for Phase 1."""
 
 import json
-import re
-import uuid
 from urllib.parse import urlencode
 
-import pytest  # noqa: F401  (used implicitly via the client fixture)
 
 # Paths, settings, and artifact isolation are configured in conftest.py.
 
@@ -30,7 +27,7 @@ def test_index_without_persona_shows_empty_state(client):
 
 
 def test_persona_create_flow(client):
-    """Creating a persona via POST /api/personas/ must return 201 and render on the dashboard."""
+    """Creating and explicitly selecting a persona must render it on the dashboard."""
     response = client.post(
         "/api/personas/",
         {
@@ -42,11 +39,53 @@ def test_persona_create_flow(client):
     )
     assert response.status_code == 201
     assert response.json()["ok"] is True
+    created = response.json()["persona"]
+    assert created["is_active"] is False
+    assert "Active: not selected" in client.get("/").content.decode()
+
+    selected = client.post(f"/api/agents/{created['id']}/set_active/")
+    assert selected.status_code == 200
+    assert selected.json()["active_agent_id"] == created["id"]
 
     dashboard = client.get("/")
     html = dashboard.content.decode()
     assert "Aria" in html
     assert "A warm companion." in html
+    assert "Active: Aria" in html
+
+
+def test_agent_browser_switches_and_reflects_active_agent(client):
+    """The browser must list personas and persist the selected active agent."""
+    first = client.post(
+        "/api/personas/",
+        {"name": "Aria", "gender": "female", "bio": "A warm companion."},
+    ).json()["persona"]
+    second = client.post(
+        "/api/personas/",
+        {"name": "Beacon", "gender": "non_binary", "bio": "A steady guide."},
+    ).json()["persona"]
+
+    browser = client.get("/agents/").content.decode()
+    assert "Aria" in browser
+    assert "Beacon" in browser
+    assert "Set as Active" in browser
+
+    selected = client.post(f"/api/agents/{second['id']}/set_active/")
+    assert selected.status_code == 200
+    assert selected.json()["active_agent_id"] == second["id"]
+
+    browser = client.get("/agents/").content.decode()
+    assert "Active: Beacon" in browser
+    assert "Current active agent" in browser
+    assert f"/api/agents/{first['id']}/set_active/" in browser
+
+    dashboard = client.get("/").content.decode()
+    assert "Active: Beacon" in dashboard
+    assert "A steady guide." in dashboard
+
+    missing = client.post("/api/agents/missing-agent/set_active/")
+    assert missing.status_code == 404
+    assert missing.json()["ok"] is False
 
 
 def test_persona_create_rejects_invalid(client):
@@ -58,10 +97,7 @@ def test_persona_create_rejects_invalid(client):
 
 def test_persona_update_ajax(client):
     """The PUT endpoint must persist updates and return JSON state."""
-    client.post(
-        "/api/personas/",
-        {"name": "Aria", "bio": "A warm companion."},
-    )
+    _create_persona(client)
 
     dashboard = client.get("/")
     html = dashboard.content.decode()
@@ -85,7 +121,7 @@ def test_persona_update_ajax(client):
 
 def test_persona_update_ajax_rejects_invalid(client):
     """The PUT endpoint must return field errors with 422, never a 500."""
-    client.post("/api/personas/", {"name": "Aria", "bio": "Warm."})
+    _create_persona(client)
     dashboard = client.get("/")
     html = dashboard.content.decode()
     agent_id = html.split('name="agent_id" value="')[1].split('"')[0]
@@ -129,10 +165,16 @@ PNG_BYTES = bytes.fromhex(
 
 
 def _create_persona(client):
-    """Create the persona under test and return its agent id from the dashboard HTML."""
-    client.post("/api/personas/", {"name": "Aria", "gender": "female", "bio": "Warm."})
-    html = client.get("/").content.decode()
-    return html.split('name="agent_id" value="')[1].split('"')[0]
+    """Create a persona, select it as active, and return its agent id."""
+    response = client.post(
+        "/api/personas/",
+        {"name": "Aria", "gender": "female", "bio": "Warm."},
+    )
+    assert response.status_code == 201
+    agent_id = response.json()["persona"]["id"]
+    selected = client.post(f"/api/agents/{agent_id}/set_active/")
+    assert selected.status_code == 200
+    return agent_id
 
 
 def test_gender_restricted_to_dropdown_options(client):
@@ -193,12 +235,10 @@ def test_sheet_upload_rejects_non_image(client):
 def test_generate_endpoint_returns_501_stub(client):
     """The generate button endpoint must answer 501 until a provider is plugged in."""
     _create_persona(client)
-    uploaded = client.post(
+    client.post(
         "/api/sheets/",
         {"sheet": _FakeUpload("aria_ref.png", PNG_BYTES, "image/png")},
     )
-    sheet_id = uploaded.json()["sheet"]["id"]
-
     response = client.post("/api/avatar/generate/")
     assert response.status_code == 501
     assert "not available in this phase" in response.json()["errors"][0]

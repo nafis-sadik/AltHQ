@@ -5,6 +5,7 @@ from .tinydb_repository import TinyDbRepository
 from .unqlite_repository import UnQliteRepository
 
 __all__ = [
+    "INoSQLRepository",
     "no_sql_repository",
     "TinyDbRepository",
     "UnQliteRepository",

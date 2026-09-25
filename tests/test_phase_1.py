@@ -6,8 +6,11 @@ import sys
 from pathlib import Path
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from core.dtos.db_entities import Agent
+from core.repositories.agent_repository import AgentRepository
 from core.repositories.json_config_repository import JsonConfigRepository
 from core.db_engine import create_sqlite_engine
 from core.repositories.db_sql_repo.sql_alchemy_repository import SQLAlchemyRepository
@@ -73,6 +76,7 @@ def test_agent_entity_schema_matches_spec():
         "bio",
         "background_story",
         "active_node_limit",
+        "is_active",
         "created_at",
         "updated_at",
     }
@@ -97,6 +101,8 @@ def test_sql_repository_crud_roundtrip(db_url):
                 )
                 saved = await repository.insert_async(agent)
                 assert saved.id
+                assert saved.is_active is False
+                assert saved.to_dict()["is_active"] is False
 
                 fetched = await repository.get_async(saved.id)
                 assert fetched is not None
@@ -118,10 +124,11 @@ def test_sql_repository_crud_roundtrip(db_url):
     run(scenario())
 
 
-def test_persona_service_resolves_default_persona(db_url):
-    """GetByIdAsync with no id must resolve the first persona, or None when empty."""
+def test_persona_service_resolves_persisted_active_agent(db_url):
+    """GetByIdAsync with no id must resolve the explicitly persisted active agent."""
     engine = create_sqlite_engine(db_url)
-    repository = SQLAlchemyRepository[Agent](Agent, engine)
+    agent_store = SQLAlchemyRepository[Agent](Agent, engine)
+    repository = AgentRepository(agent_store)
     service = PersonaService(
         persona_repository=repository,
         config=JsonConfigRepository(str(db_url) + ".json"),
@@ -129,25 +136,127 @@ def test_persona_service_resolves_default_persona(db_url):
 
     async def scenario():
         try:
-            await repository.create_schema()
+            await agent_store.create_schema()
             assert await service.GetByIdAsync(None) is None
 
-            async with repository:
-                await repository.insert_async(
-                    Agent(
-                        name="Aria",
-                        gender="female",
-                        profile_picture="assets/aria.png",
-                        bio="A warm companion.",
-                        background_story="Home lab origin.",
-                        active_node_limit=20,
-                    )
+            await repository.insert_async(
+                Agent(
+                    name="Aria",
+                    gender="female",
+                    profile_picture="assets/aria.png",
+                    bio="A warm companion.",
+                    background_story="Home lab origin.",
+                    active_node_limit=20,
                 )
+            )
+            beacon = await repository.insert_async(
+                Agent(
+                    name="Beacon",
+                    gender="non_binary",
+                    profile_picture="assets/beacon.png",
+                    bio="A steady guide.",
+                    background_story="Quiet observatory origin.",
+                    active_node_limit=20,
+                )
+            )
+
+            assert await service.GetByIdAsync(None) is None
+            await service.set_active_async(beacon.id)
             persona = await service.GetByIdAsync(None)
             assert persona is not None
-            assert persona.name == "Aria"
+            assert persona.name == "Beacon"
+            assert [agent.name for agent in await service.list_agents_async()] == [
+                "Aria",
+                "Beacon",
+            ]
         finally:
-            await repository.dispose()
+            await agent_store.dispose()
+
+    run(scenario())
+
+
+def test_agent_repository_switches_active_atomically(db_url):
+    """Active-agent switching must leave exactly the requested agent selected."""
+    engine = create_sqlite_engine(db_url)
+    agent_store = SQLAlchemyRepository[Agent](Agent, engine)
+    repository = AgentRepository(agent_store)
+
+    async def scenario():
+        try:
+            await agent_store.create_schema()
+            first = await repository.insert_async(
+                Agent(
+                    name="Aria",
+                    gender="female",
+                    profile_picture="",
+                    bio="First",
+                    background_story="First origin",
+                )
+            )
+            second = await repository.insert_async(
+                Agent(
+                    name="Beacon",
+                    gender="non_binary",
+                    profile_picture="",
+                    bio="Second",
+                    background_story="Second origin",
+                )
+            )
+
+            assert await repository.get_active_async() is None
+            await repository.set_active_async(first.id)
+            assert (await repository.get_active_async()).id == first.id
+            await repository.set_active_async(second.id)
+
+            active = await repository.get_active_async()
+            assert active is not None
+            assert active.id == second.id
+
+            with pytest.raises(LookupError):
+                await repository.set_active_async("missing-agent")
+            assert (await repository.get_active_async()).id == second.id
+        finally:
+            await agent_store.dispose()
+
+    run(scenario())
+
+
+def test_agent_table_rejects_multiple_active_agents_at_database_level(db_url):
+    """The partial unique index must reject a second persisted active agent."""
+    engine = create_sqlite_engine(db_url)
+    agent_store = SQLAlchemyRepository[Agent](Agent, engine)
+    repository = AgentRepository(agent_store)
+
+    async def scenario():
+        try:
+            await agent_store.create_schema()
+            first = await repository.insert_async(
+                Agent(
+                    name="Aria",
+                    gender="female",
+                    profile_picture="",
+                    bio="First",
+                    background_story="First origin",
+                )
+            )
+            await repository.insert_async(
+                Agent(
+                    name="Beacon",
+                    gender="non_binary",
+                    profile_picture="",
+                    bio="Second",
+                    background_story="Second origin",
+                )
+            )
+            await repository.set_active_async(first.id)
+
+            with pytest.raises(IntegrityError):
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        text("UPDATE agents SET is_active = 1 WHERE name = 'Beacon'")
+                    )
+        finally:
+            await agent_store.dispose()
 
     run(scenario())
 
@@ -205,6 +314,7 @@ class StubPersonaRepository:
         if isinstance(entity, dict):
             entity = Agent(**entity)
         entity.id = str(self.next_id)
+        entity.is_active = bool(getattr(entity, "is_active", False))
         self.next_id += 1
         self.rows[entity.id] = entity
         return entity
@@ -214,6 +324,19 @@ class StubPersonaRepository:
 
     async def get_all_async(self):
         return list(self.rows.values())
+
+    async def get_active_async(self):
+        return next(
+            (entity for entity in self.rows.values() if entity.is_active),
+            None,
+        )
+
+    async def set_active_async(self, agent_id):
+        if agent_id not in self.rows:
+            raise LookupError("Persona not found.")
+        for entity in self.rows.values():
+            entity.is_active = entity.id == agent_id
+        return self.rows[agent_id]
 
     async def update_async(self, entity_id, values):
         if entity_id not in self.rows:
@@ -327,6 +450,18 @@ def test_persona_service_enforces_configured_node_limit():
     assert service._config.get("persona.max_active_node_limit") == 60
 
 
+def test_persona_service_does_not_promote_new_agents(persona_service):
+    """A new persona must wait for an explicit persisted active-agent selection."""
+    created = run(
+        persona_service.AddNewAsync(
+            PersonaUpdate(name="Aria", bio="A warm companion.")
+        )
+    )
+
+    assert created.is_active is False
+    assert run(persona_service.GetByIdAsync(None)) is None
+
+
 def test_persona_service_update_persona_applies_changes(persona_service):
     """UpdateExistingAsync must persist normalized changes through the injected repository."""
 
@@ -369,7 +504,8 @@ def test_persona_state_serialization_and_prompt_compilation(persona_service):
 def test_persona_service_end_to_end_with_real_layer3(db_url, config_path):
     """PersonaService wired to the real Layer 3 stack must update and compile prompts."""
     engine = create_sqlite_engine(db_url)
-    repository = SQLAlchemyRepository[Agent](Agent, engine)
+    agent_store = SQLAlchemyRepository[Agent](Agent, engine)
+    repository = AgentRepository(agent_store)
     service = PersonaService(
         persona_repository=repository,
         config=JsonConfigRepository(config_path),
@@ -377,20 +513,20 @@ def test_persona_service_end_to_end_with_real_layer3(db_url, config_path):
 
     async def scenario():
         try:
-            await repository.create_schema()
-            async with repository:
-                persona = await repository.insert_async(_sample_persona())
-                await service.UpdateExistingAsync(
-                    persona.id,
-                    PersonaUpdate(bio="Rewritten with care."),
-                )
-                current = await service.GetByIdAsync(persona.id)
-                assert current.bio == "Rewritten with care."
+            await agent_store.create_schema()
+            persona = await repository.insert_async(_sample_persona())
+            await service.UpdateExistingAsync(
+                persona.id,
+                PersonaUpdate(bio="Rewritten with care."),
+            )
+            await service.set_active_async(persona.id)
+            current = await service.GetByIdAsync(persona.id)
+            assert current.bio == "Rewritten with care."
 
-                segments = await service.CompileBasePrompt()
-                assert segments.identity.startswith("Aria")
+            segments = await service.CompileBasePrompt()
+            assert segments.identity.startswith("Aria")
         finally:
-            await repository.dispose()
+            await agent_store.dispose()
 
     run(scenario())
 
@@ -398,7 +534,8 @@ def test_persona_service_end_to_end_with_real_layer3(db_url, config_path):
 def test_persona_service_pages_personas_with_totals(db_url):
     """GetPagedPersona must order by name and return paging totals."""
     engine = create_sqlite_engine(db_url)
-    repository = SQLAlchemyRepository[Agent](Agent, engine)
+    agent_store = SQLAlchemyRepository[Agent](Agent, engine)
+    repository = AgentRepository(agent_store)
     service = PersonaService(
         persona_repository=repository,
         config=JsonConfigRepository(str(db_url) + ".json"),
@@ -406,16 +543,15 @@ def test_persona_service_pages_personas_with_totals(db_url):
 
     async def scenario():
         try:
-            await repository.create_schema()
-            async with repository:
-                for name in ("Zed", "Aria", "Moon"):
-                    await repository.insert_async(Agent(
-                        name=name,
-                        gender="female",
-                        profile_picture="assets/aria.png",
-                        bio="A warm companion.",
-                        background_story="Home lab origin.",
-                    ))
+            await agent_store.create_schema()
+            for name in ("Zed", "Aria", "Moon"):
+                await repository.insert_async(Agent(
+                    name=name,
+                    gender="female",
+                    profile_picture="assets/aria.png",
+                    bio="A warm companion.",
+                    background_story="Home lab origin.",
+                ))
 
             page = await service.GetPagedPersona(1, 2)
             assert page.total_items == 3
@@ -425,7 +561,7 @@ def test_persona_service_pages_personas_with_totals(db_url):
             second_page = await service.GetPagedPersona(2, 2)
             assert [row.name for row in second_page.source_data] == ["Zed"]
         finally:
-            await repository.dispose()
+            await agent_store.dispose()
 
     run(scenario())
 
@@ -438,9 +574,9 @@ def test_persona_service_pages_personas_with_totals(db_url):
 def test_layer2_imports_load_no_framework_modules():
     """Importing business logic must not load a web framework, NoSQL store, or driver.
 
-    Layer 2 reuses Layer 3 DTOs and the ``ISQLRepository`` interface, which pulls
-    in sqlalchemy core types; it still must stay free of any web framework, NoSQL
-    database store (tinydb/unqlite), or the aiosqlite driver.
+    Layer 2 reuses Layer 3 DTOs for its public value objects, but it must stay
+    free of any web framework, NoSQL database store (tinydb/unqlite), or the
+    aiosqlite driver.
     """
     snippet = (
         "import sys; sys.path.insert(0, r'{src}'); "

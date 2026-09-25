@@ -37,6 +37,7 @@ class PersonaUpdate:
     bio: Optional[str] = None
     background_story: Optional[str] = None
     active_node_limit: Optional[int] = None
+    is_active: Optional[bool] = None
 
     def has_changes(self) -> bool:
         """Return True if any of the fields are non-None, indicating a change."""
@@ -61,6 +62,7 @@ class PersonaUpdate:
             bio=self.bio,
             background_story=self.background_story,
             active_node_limit=self.active_node_limit,
+            is_active=self.is_active or False,
         )
 
     @staticmethod
@@ -74,11 +76,16 @@ class PersonaUpdate:
             bio=entity.bio,
             background_story=entity.background_story,
             active_node_limit=entity.active_node_limit,
+            is_active=entity.is_active,
         )
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dictionary of the non-None, editable fields for database update."""
-        return {k: v for k, v in self.__dict__.items() if v is not None and k != "id"}
+        return {
+            key: value
+            for key, value in self.__dict__.items()
+            if value is not None and key not in {"id", "is_active"}
+        }
 
 
 @dataclass

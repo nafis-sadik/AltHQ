@@ -1,7 +1,7 @@
 """Abstract async SQL repository interface for CRUD operations on a generic entity type."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, List, Optional, Sequence, TypeVar
+from typing import Any, Generic, List, Optional, TypeVar
 from sqlalchemy import Result
 from sqlalchemy.sql import Select
 

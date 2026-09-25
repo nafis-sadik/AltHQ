@@ -36,8 +36,15 @@
       <div class="ms-auto d-flex align-items-center gap-3">
         <a class="nav-link p-0" href="{% url 'dashboard:index' %}{% if selected_agent %}?agent_id={{ selected_agent.id }}{% endif %}">Persona</a>
         <a class="nav-link p-0 active" href="{% url 'dashboard:event_log' %}{% if selected_agent %}?agent_id={{ selected_agent.id }}{% endif %}">Event Log</a>
+        <a class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-2"
+           href="{% url 'dashboard:agents' %}"
+           title="Change active agent">
+          <span aria-hidden="true">⇄</span>
+          <span>Active: {% if active_agent %}{{ active_agent.name }}{% else %}not selected{% endif %}</span>
+        </a>
         {% if agents %}
-          <form method="get" action="{% url 'dashboard:agent_switch' %}" class="d-flex align-items-center gap-1">
+          <form method="post" action="{% url 'dashboard:agent_switch' %}" class="d-flex align-items-center gap-1">
+            {% csrf_token %}
             <label class="visually-hidden" for="event-agent-switcher">Active agent</label>
             <select id="event-agent-switcher" name="agent_id" class="form-select form-select-sm" onchange="this.form.submit()">
               {% for agent in agents %}

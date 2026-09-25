@@ -32,7 +32,22 @@ class IPersonaService(ABC):
 
     @abstractmethod
     async def GetByIdAsync(self, agent_id: Optional[str] = None) -> Optional[Any]:
-        """Return one persona row, resolving the default persona when no id is given."""
+        """Return one persona row, resolving the active agent when no id is given."""
+        ...
+
+    @abstractmethod
+    async def get_active_async(self) -> Optional[Any]:
+        """Return the persisted active agent, or None when none is selected."""
+        ...
+
+    @abstractmethod
+    async def set_active_async(self, agent_id: str) -> Any:
+        """Atomically persist one agent as active and return it."""
+        ...
+
+    @abstractmethod
+    async def list_agents_async(self) -> List[Any]:
+        """Return every persona sorted by name for agent selection UIs."""
         ...
 
     @abstractmethod
@@ -47,5 +62,5 @@ class IPersonaService(ABC):
 
     @abstractmethod
     async def CompileBasePrompt(self) -> PersonaPromptSegments:
-        """Load the default persona and compile its prompt segments in one step."""
+        """Load the active agent and compile its prompt segments in one step."""
         ...

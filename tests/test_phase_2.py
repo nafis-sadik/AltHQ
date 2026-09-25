@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from core.dtos.db_entities import Agent, EventLogNode, Message
 from core.db_engine import create_sqlite_engine
+from core.repositories.agent_repository import AgentRepository
 from core.repositories.db_sql_repo.sql_alchemy_repository import SQLAlchemyRepository
 
 
@@ -31,13 +32,14 @@ def db_url(tmp_path):
 
 
 def _session_repositories(db_url):
-    """Build one shared engine plus the three generic repositories (schema created)."""
+    """Build one shared engine plus the agent facade and two generic repositories."""
     engine = create_sqlite_engine(db_url)
-    agents = SQLAlchemyRepository[Agent](Agent, engine)
+    agent_store = SQLAlchemyRepository[Agent](Agent, engine)
+    agents = AgentRepository(agent_store)
     events = SQLAlchemyRepository[EventLogNode](EventLogNode, engine)
     messages = SQLAlchemyRepository[Message](Message, engine)
-    run(agents.create_schema())
-    return agents, events, messages
+    run(agent_store.create_schema())
+    return agents, events, messages, agent_store
 
 
 # ---------------------------------------------------------------------------
@@ -64,29 +66,28 @@ def test_event_log_node_schema_matches_spec():
 
 def test_event_timelines_are_scoped_to_agent_foreign_key(db_url):
     """Event nodes must belong to an existing Agent and remain agent-scoped."""
-    agents, events, messages = _session_repositories(db_url)
+    agents, events, messages, agent_store = _session_repositories(db_url)
 
     async def scenario():
         try:
-            async with agents:
-                first = await agents.insert_async(
-                    Agent(
-                        name="Aria",
-                        gender="female",
-                        profile_picture="x",
-                        bio="A",
-                        background_story="A",
-                    )
+            first = await agents.insert_async(
+                Agent(
+                    name="Aria",
+                    gender="female",
+                    profile_picture="x",
+                    bio="A",
+                    background_story="A",
                 )
-                second = await agents.insert_async(
-                    Agent(
-                        name="Beacon",
-                        gender="non_binary",
-                        profile_picture="x",
-                        bio="B",
-                        background_story="B",
-                    )
+            )
+            second = await agents.insert_async(
+                Agent(
+                    name="Beacon",
+                    gender="non_binary",
+                    profile_picture="x",
+                    bio="B",
+                    background_story="B",
                 )
+            )
 
             async with events:
                 await events.insert_async(
@@ -135,7 +136,7 @@ def test_event_timelines_are_scoped_to_agent_foreign_key(db_url):
                         )
                     )
         finally:
-            await agents.dispose()
+            await agent_store.dispose()
 
     run(scenario())
 
@@ -159,13 +160,13 @@ def test_message_schema_matches_spec():
 
 def _agent_id(db_url):
     """Insert the minimal persona row needed by the event repositories."""
-    agents = SQLAlchemyRepository[Agent](Agent, create_sqlite_engine(db_url))
+    agent_store = SQLAlchemyRepository[Agent](Agent, create_sqlite_engine(db_url))
 
     async def setup():
         try:
-            await agents.create_schema()
-            async with agents:
-                agent = await agents.insert_async(
+            await agent_store.create_schema()
+            async with agent_store:
+                agent = await agent_store.insert_async(
                     Agent(
                         name="Aria",
                         gender="female",
@@ -177,7 +178,7 @@ def _agent_id(db_url):
                 )
                 return agent.id
         finally:
-            await agents.dispose()
+            await agent_store.dispose()
 
     return run(setup())
 
@@ -187,7 +188,7 @@ def test_event_log_manager_auto_sequences_and_timeline_order(db_url):
     agent_id = _agent_id(db_url)
     from business.memory.event_log_manager import EventLogManager
 
-    agents, events, messages = _session_repositories(db_url)
+    agents, events, messages, agent_store = _session_repositories(db_url)
     manager = EventLogManager(
         event_repository=events,
         message_repository=messages,
@@ -209,7 +210,50 @@ def test_event_log_manager_auto_sequences_and_timeline_order(db_url):
                 "Checked the garden.",
             ]
         finally:
-            await agents.dispose()
+            await agent_store.dispose()
+
+    run(scenario())
+
+
+def test_event_manager_uses_persisted_active_when_agent_id_is_omitted(db_url):
+    """Omitted ids must follow the selected active agent, not alphabetical ordering."""
+    from business.memory.event_log_manager import EventLogManager
+
+    agents, events, messages, agent_store = _session_repositories(db_url)
+    manager = EventLogManager(
+        event_repository=events,
+        message_repository=messages,
+        agent_repository=agents,
+    )
+
+    async def scenario():
+        try:
+            aria = await agents.insert_async(
+                Agent(
+                    name="Aria",
+                    gender="female",
+                    profile_picture="",
+                    bio="A",
+                    background_story="A",
+                )
+            )
+            zed = await agents.insert_async(
+                Agent(
+                    name="Zed",
+                    gender="male",
+                    profile_picture="",
+                    bio="Z",
+                    background_story="Z",
+                )
+            )
+
+            await agents.set_active_async(zed.id)
+            node = await manager.add_node_async("Active timeline event.")
+
+            assert node.agent_id == zed.id
+            assert node.agent_id != aria.id
+        finally:
+            await agent_store.dispose()
 
     run(scenario())
 
@@ -219,7 +263,7 @@ def test_event_active_flag_and_update(db_url):
     agent_id = _agent_id(db_url)
     from business.memory.event_log_manager import EventLogManager
 
-    agents, events, messages = _session_repositories(db_url)
+    agents, events, messages, agent_store = _session_repositories(db_url)
     manager = EventLogManager(
         event_repository=events,
         message_repository=messages,
@@ -240,7 +284,7 @@ def test_event_active_flag_and_update(db_url):
             window = await manager.get_memory_window_async(agent_id)
             assert window.active_nodes == []
         finally:
-            await agents.dispose()
+            await agent_store.dispose()
 
     run(scenario())
 
@@ -250,7 +294,7 @@ def test_message_repository_attaches_messages_to_node(db_url):
     agent_id = _agent_id(db_url)
     from business.memory.event_log_manager import EventLogManager
 
-    agents, events, messages = _session_repositories(db_url)
+    agents, events, messages, agent_store = _session_repositories(db_url)
     manager = EventLogManager(
         event_repository=events,
         message_repository=messages,
@@ -275,7 +319,7 @@ def test_message_repository_attaches_messages_to_node(db_url):
             ]
             assert [message.position for message in timeline[0].messages] == [0, 1]
         finally:
-            await agents.dispose()
+            await agent_store.dispose()
 
     run(scenario())
 
@@ -285,7 +329,7 @@ def test_event_manager_blocks_delete_when_messages_exist(db_url):
     agent_id = _agent_id(db_url)
     from business.memory.event_log_manager import EventLogManager
 
-    agents, events, messages = _session_repositories(db_url)
+    agents, events, messages, agent_store = _session_repositories(db_url)
     manager = EventLogManager(
         event_repository=events,
         message_repository=messages,
@@ -305,7 +349,7 @@ def test_event_manager_blocks_delete_when_messages_exist(db_url):
             await manager.delete_node_async(node.id, agent_id=agent_id)
             assert await manager.list_timeline_async(agent_id) == []
         finally:
-            await agents.dispose()
+            await agent_store.dispose()
 
     run(scenario())
 
@@ -315,7 +359,7 @@ def test_message_repository_reorders_by_explicit_position(db_url):
     agent_id = _agent_id(db_url)
     from business.memory.event_log_manager import EventLogManager
 
-    agents, events, messages = _session_repositories(db_url)
+    agents, events, messages, agent_store = _session_repositories(db_url)
     manager = EventLogManager(
         event_repository=events,
         message_repository=messages,
@@ -351,7 +395,7 @@ def test_message_repository_reorders_by_explicit_position(db_url):
             timeline = await manager.list_timeline_async(agent_id)
             assert [message.content for message in timeline[0].messages] == ["Second", "First"]
         finally:
-            await agents.dispose()
+            await agent_store.dispose()
 
     run(scenario())
 
@@ -359,7 +403,7 @@ def test_message_repository_reorders_by_explicit_position(db_url):
 def test_event_repository_drop_schema_clears_tables(db_url):
     """drop_schema must leave the database without the event tables."""
     agent_id = _agent_id(db_url)
-    agents, events, messages = _session_repositories(db_url)
+    agents, events, messages, agent_store = _session_repositories(db_url)
 
     async def scenario():
         try:
@@ -383,13 +427,13 @@ def test_event_repository_drop_schema_clears_tables(db_url):
                 await events.create_schema()
                 assert await events.get_all_async() == []
         finally:
-            await agents.dispose()
+            await agent_store.dispose()
 
     run(scenario())
 
 
 class StubAgentRepository:
-    """In-memory default-agent lookup used to keep the memory service tests storage-free."""
+    """In-memory active-agent lookup used to keep the memory service tests storage-free."""
 
     def __init__(self, agent_id="agent-1", name="Aria", active_node_limit=20):
         self._agent_id = agent_id
@@ -417,6 +461,9 @@ class StubAgentRepository:
 
     async def get_all_async(self):
         return [await self.get_async(self._agent_id)]
+
+    async def get_active_async(self):
+        return await self.get_async(self._agent_id)
 
 
 class StubEventRepository:
@@ -536,7 +583,7 @@ def test_memory_service_lists_timeline_as_plain_entries():
 
     async def scenario():
         first = await manager.append_node_async("Morning routine.")
-        second = await manager.append_node_async("Long walk.", is_active=False)
+        await manager.append_node_async("Long walk.", is_active=False)
         await manager.append_message_async(first.id, "user", "Good morning!")
 
         timeline = await manager.list_timeline_async()
@@ -556,7 +603,7 @@ def test_memory_service_lists_timeline_as_plain_entries():
     run(scenario())
 
 
-def test_memory_service_validation_and_missing_default_agent():
+def test_memory_service_validation_and_missing_active_agent():
     """Blank input must raise and a missing persona must surface a clear lookup error."""
     from business.memory.event_log_manager import EventLogManager
 
@@ -736,8 +783,6 @@ def test_explicit_node_edit_updates_timeline_and_invalidates_cache():
 
 def test_message_crud_supports_speaker_text_and_manual_timestamp():
     """Messages can be added, explicitly edited, and given a conversation time."""
-    from business.memory.event_log_manager import EventLogManager
-
     manager = _memory_manager()
 
     async def scenario():
@@ -781,8 +826,8 @@ def test_messages_can_reorder_and_move_between_nodes():
     async def scenario():
         first_node = await manager.add_node_async("First node.")
         second_node = await manager.add_node_async("Second node.")
-        first = await manager.append_message_async(first_node.id, "user", "One")
-        second = await manager.append_message_async(first_node.id, "agent-1", "Two")
+        await manager.append_message_async(first_node.id, "user", "One")
+        await manager.append_message_async(first_node.id, "agent-1", "Two")
         third = await manager.append_message_async(first_node.id, "user", "Three")
 
         await manager.move_message_position_async(third.id, "up")

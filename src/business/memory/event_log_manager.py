@@ -10,7 +10,8 @@ from business.memory.memory_window_service import (
     MemoryWindow,
     MemoryWindowService,
 )
-from core.dtos.db_entities import Agent, EventLogNode, Message
+from business.persona.repository_protocols import IPersonaRepository
+from core.dtos.db_entities import EventLogNode, Message
 from core.repositories.db_sql_repo.sql_repository import ISQLRepository
 
 # Fallback active node limit used when the persona row does not expose one.
@@ -165,7 +166,7 @@ class EventLogManager(IEventLogService):
         self,
         event_repository: ISQLRepository[EventLogNode],
         message_repository: ISQLRepository[Message],
-        agent_repository: Optional[ISQLRepository[Agent]] = None,
+        agent_repository: Optional[IPersonaRepository] = None,
     ) -> None:
         """Store injected repositories and build the framework-free memory helper."""
         self._events = event_repository
@@ -185,7 +186,7 @@ class EventLogManager(IEventLogService):
 
     async def list_timeline_async(self, agent_id: Optional[str] = None) -> List[TimelineEntry]:
         """Return every node for the agent in chronological sequence order."""
-        agent_id = agent_id or await self._resolve_default_agent_id()
+        agent_id = agent_id or await self._resolve_active_agent_id()
 
         nodes = await self._nodes_of_agent_async(agent_id)
         entries: List[TimelineEntry] = []
@@ -216,7 +217,7 @@ class EventLogManager(IEventLogService):
         if not summary or not summary.strip():
             raise ValueError("summary must not be blank.")
 
-        agent_id = agent_id or await self._resolve_default_agent_id()
+        agent_id = agent_id or await self._resolve_active_agent_id()
         await self._ensure_agent_exists_async(agent_id)
 
         timeline = await self._nodes_of_agent_async(agent_id)
@@ -521,20 +522,18 @@ class EventLogManager(IEventLogService):
         async with self._messages:
             return await self._messages.get_async(message_id)
 
-    async def _get_persona_async(self, agent_id: str) -> Optional[Agent]:
-        """Fetch the selected agent row, or None when no persona exists yet."""
+    async def _get_persona_async(self, agent_id: str) -> Optional[Any]:
+        """Fetch the selected agent row, or None when no active agent exists yet."""
         if self._agents is None:
             return None
-        async with self._agents:
-            return await self._agents.get_async(agent_id)
+        return await self._agents.get_async(agent_id)
 
     async def _ensure_agent_exists_async(self, agent_id: str) -> None:
         """Ensure an explicitly selected agent exists before writing its timeline."""
         if self._agents is None:
             return
-        async with self._agents:
-            if await self._agents.get_async(agent_id) is None:
-                raise LookupError("Agent not found.")
+        if await self._agents.get_async(agent_id) is None:
+            raise LookupError("Agent not found.")
 
     async def _assert_node_agent_async(self, node: Any, agent_id: Optional[str]) -> None:
         """Reject cross-agent timeline mutations."""
@@ -602,15 +601,11 @@ class EventLogManager(IEventLogService):
                     continue
         return max(positions, default=-1) + 1
 
-    async def _resolve_default_agent_id(self) -> str:
-        """Return the first persona's id, or raise when no persona exists yet."""
+    async def _resolve_active_agent_id(self) -> str:
+        """Return the persisted active agent's id, or raise when none exists."""
         if self._agents is None:
             raise LookupError("no persona has been created yet.")
-        async with self._agents:
-            personas = await self._agents.get_all_async()
-        if not personas:
+        persona = await self._agents.get_active_async()
+        if persona is None:
             raise LookupError("no persona has been created yet.")
-        return sorted(
-            personas,
-            key=lambda persona: (str(persona.name).casefold(), str(persona.id)),
-        )[0].id
+        return str(persona.id)

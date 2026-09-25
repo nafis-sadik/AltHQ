@@ -16,11 +16,16 @@ def _put(client, url, data):
 
 
 def _create_persona(client):
-    """Create the default persona used by the event log flows."""
-    return client.post(
+    """Create and explicitly select the active agent used by event-log flows."""
+    response = client.post(
         "/api/personas/",
         {"name": "Aria", "gender": "female", "bio": "A warm companion."},
     )
+    assert response.status_code == 201
+    agent_id = response.json()["persona"]["id"]
+    selected = client.post(f"/api/agents/{agent_id}/set_active/")
+    assert selected.status_code == 200
+    return agent_id
 
 
 def _agent_id(client):
@@ -187,10 +192,10 @@ def test_messages_can_reorder_and_be_deleted(client):
     _create_persona(client)
     agent_id = _agent_id(client)
     node = _create_node(client, "A conversation happened.")
-    first = client.post(
+    client.post(
         f"/api/events/{node['id']}/messages/",
         {"agent_id": agent_id, "sender": "user", "content": "One"},
-    ).json()["message"]
+    )
     second = client.post(
         f"/api/events/{node['id']}/messages/",
         {"agent_id": agent_id, "sender": agent_id, "content": "Two"},
@@ -261,8 +266,9 @@ def test_agents_have_isolated_timelines_and_switcher(client):
     )
     assert message.status_code == 200
 
-    switched = client.get(
-        f"/agents/switch/?agent_id={second_agent_id}&destination=events"
+    switched = client.post(
+        "/agents/switch/",
+        {"agent_id": second_agent_id, "destination": "events"},
     )
     assert switched.status_code == 302
     assert f"agent_id={second_agent_id}" in switched["Location"]
@@ -273,3 +279,21 @@ def test_agents_have_isolated_timelines_and_switcher(client):
     assert "Beacon (AI agent)" in html
     assert f'value="{second_agent_id}"' in html
     assert first_node["id"] not in html
+
+
+def test_omitted_event_agent_id_uses_persisted_active_agent(client):
+    """Event-log requests without an id must target the selected active agent."""
+    _create_persona(client)
+    second = client.post(
+        "/api/personas/",
+        {"name": "Beacon", "gender": "non_binary", "bio": "Second agent."},
+    ).json()["persona"]
+    selected = client.post(f"/api/agents/{second['id']}/set_active/")
+    assert selected.status_code == 200
+
+    created = client.post("/api/events/", {"summary": "Beacon active event."})
+    assert created.status_code == 200
+
+    html = client.get("/events/").content.decode()
+    assert "Beacon active event." in html
+    assert "Active: Beacon" in html
